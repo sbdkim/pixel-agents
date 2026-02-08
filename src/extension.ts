@@ -3,8 +3,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-const CLAUDE_TERMINAL_PATTERN = /^Claude Code #(\d+)$/;
-
 interface AgentState {
 	id: number;
 	terminalRef: vscode.Terminal;
@@ -21,17 +19,18 @@ class ArcadiaViewProvider implements vscode.WebviewViewProvider {
 	private nextAgentId = 1;
 	private nextTerminalIndex = 1;
 	private agents = new Map<number, AgentState>();
-	private claimedFiles = new Set<string>();
 	private webviewView: vscode.WebviewView | undefined;
 
 	// Per-agent timers
 	private fileWatchers = new Map<number, fs.FSWatcher>();
 	private pollingTimers = new Map<number, ReturnType<typeof setInterval>>();
 	private waitingTimers = new Map<number, ReturnType<typeof setTimeout>>();
+	private jsonlPollTimers = new Map<number, ReturnType<typeof setInterval>>();
 
-	// Per-terminal scan state (runs continuously to pick up new JSONL files)
-	private terminalProjectDirs = new Map<vscode.Terminal, string>();
-	private terminalScanTimers = new Map<vscode.Terminal, ReturnType<typeof setInterval>>();
+	// /clear detection: project-level scan for new JSONL files
+	private activeAgentId: number | null = null;
+	private knownJsonlFiles = new Set<string>();
+	private projectScanTimer: ReturnType<typeof setInterval> | null = null;
 
 	constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -43,8 +42,6 @@ class ArcadiaViewProvider implements vscode.WebviewViewProvider {
 		this.webviewView = webviewView;
 		webviewView.webview.options = { enableScripts: true };
 		webviewView.webview.html = getWebviewContent(webviewView.webview, this.extensionUri);
-
-		this.adoptExistingTerminals();
 
 		webviewView.webview.onDidReceiveMessage((message) => {
 			if (message.type === 'openClaude') {
@@ -69,25 +66,27 @@ class ArcadiaViewProvider implements vscode.WebviewViewProvider {
 			}
 		});
 
+		vscode.window.onDidChangeActiveTerminal((terminal) => {
+			this.activeAgentId = null;
+			if (!terminal) { return; }
+			for (const [id, agent] of this.agents) {
+				if (agent.terminalRef === terminal) {
+					this.activeAgentId = id;
+					webviewView.webview.postMessage({ type: 'agentSelected', id });
+					break;
+				}
+			}
+		});
+
 		vscode.window.onDidCloseTerminal((closed) => {
-			// Remove all agents on this terminal
 			for (const [id, agent] of this.agents) {
 				if (agent.terminalRef === closed) {
+					if (this.activeAgentId === id) {
+						this.activeAgentId = null;
+					}
 					this.removeAgent(id);
 					webviewView.webview.postMessage({ type: 'agentClosed', id });
 				}
-			}
-			this.cleanupTerminalScan(closed);
-		});
-
-		vscode.window.onDidOpenTerminal((terminal) => {
-			const match = terminal.name.match(CLAUDE_TERMINAL_PATTERN);
-			if (match && !this.isTracked(terminal)) {
-				const idx = parseInt(match[1], 10);
-				if (idx >= this.nextTerminalIndex) {
-					this.nextTerminalIndex = idx + 1;
-				}
-				this.startTerminalFileScan(terminal);
 			}
 		});
 	}
@@ -103,74 +102,24 @@ class ArcadiaViewProvider implements vscode.WebviewViewProvider {
 
 		const sessionId = crypto.randomUUID();
 		terminal.sendText(`claude --session-id ${sessionId}`);
-		this.startTerminalFileScan(terminal, sessionId, cwd);
-	}
 
-	private startTerminalFileScan(terminal: vscode.Terminal, sessionId?: string, cwd?: string) {
 		const projectDir = this.getProjectDirPath(cwd);
 		if (!projectDir) {
-			console.log(`[Arcadia] No project dir for terminal ${terminal.name}`);
+			console.log(`[Arcadia] No project dir, cannot track agent`);
 			return;
 		}
-		this.terminalProjectDirs.set(terminal, projectDir);
-		console.log(`[Arcadia] Terminal ${terminal.name}: scanning dir ${projectDir}`);
 
-		const scanInterval = setInterval(() => this.scanForNewFiles(terminal, sessionId), 1000);
-		this.terminalScanTimers.set(terminal, scanInterval);
-	}
+		// Pre-register expected JSONL file so project scan won't treat it as a /clear file
+		const expectedFile = path.join(projectDir, `${sessionId}.jsonl`);
+		this.knownJsonlFiles.add(expectedFile);
 
-	private isFileRecent(filePath: string): boolean {
-		const maxAge = vscode.workspace.getConfiguration('arcadia').get<number>('sessionMaxAgeSecs', 180);
-		if (maxAge === 0) { return true; } // 0 = show all
-		try {
-			const mtime = fs.statSync(filePath).mtimeMs;
-			return (Date.now() - mtime) < maxAge * 1000;
-		} catch { return false; }
-	}
-
-	private scanForNewFiles(terminal: vscode.Terminal, sessionId?: string) {
-		const projectDir = this.terminalProjectDirs.get(terminal);
-		if (!projectDir) { return; }
-
-		// Session-ID deterministic lookup (always claim own file regardless of age)
-		if (sessionId) {
-			const expectedFile = path.join(projectDir, `${sessionId}.jsonl`);
-			try {
-				if (fs.existsSync(expectedFile) && !this.claimedFiles.has(expectedFile)) {
-					console.log(`[Arcadia] Terminal ${terminal.name}: found session file ${sessionId}.jsonl`);
-					this.createAgentFromFile(terminal, expectedFile, projectDir);
-				}
-			} catch { /* file may not exist yet */ }
-			// Session-ID terminals only claim their own file; /clear files are
-			// picked up by the continuous generic scan below.
-		}
-
-		// Generic scan: pick up any unclaimed JSONL files in the project dir.
-		// This handles adopted terminals (no session ID) and /clear files.
-		// Only claim files modified within the configured max age.
-		let files: string[];
-		try {
-			files = fs.readdirSync(projectDir)
-				.filter(f => f.endsWith('.jsonl'))
-				.map(f => path.join(projectDir, f));
-		} catch { return; }
-
-		for (const file of files) {
-			if (!this.claimedFiles.has(file) && this.isFileRecent(file)) {
-				console.log(`[Arcadia] Terminal ${terminal.name}: found unclaimed file ${path.basename(file)}`);
-				this.createAgentFromFile(terminal, file, projectDir);
-			}
-		}
-	}
-
-	private createAgentFromFile(terminal: vscode.Terminal, filePath: string, projectDir: string) {
+		// Create agent immediately (before JSONL file exists)
 		const id = this.nextAgentId++;
-
 		const agent: AgentState = {
 			id,
 			terminalRef: terminal,
 			projectDir,
-			jsonlFile: filePath,
+			jsonlFile: expectedFile,
 			fileOffset: 0,
 			lineBuffer: '',
 			activeToolIds: new Set(),
@@ -179,15 +128,86 @@ class ArcadiaViewProvider implements vscode.WebviewViewProvider {
 		};
 
 		this.agents.set(id, agent);
-		this.claimedFiles.add(filePath);
-
-		console.log(`[Arcadia] Agent ${id}: created, watching ${path.basename(filePath)}`);
-
+		this.activeAgentId = id;
+		console.log(`[Arcadia] Agent ${id}: created for terminal ${terminal.name}`);
 		this.webviewView?.webview.postMessage({ type: 'agentCreated', id });
-		this.startFileWatching(id, filePath);
 
-		// Initial read
-		this.readNewLines(id);
+		this.ensureProjectScan(projectDir);
+
+		// Poll for the specific JSONL file to appear
+		const pollTimer = setInterval(() => {
+			try {
+				if (fs.existsSync(agent.jsonlFile)) {
+					console.log(`[Arcadia] Agent ${id}: found JSONL file ${path.basename(agent.jsonlFile)}`);
+					clearInterval(pollTimer);
+					this.jsonlPollTimers.delete(id);
+					this.startFileWatching(id, agent.jsonlFile);
+					this.readNewLines(id);
+				}
+			} catch { /* file may not exist yet */ }
+		}, 1000);
+		this.jsonlPollTimers.set(id, pollTimer);
+	}
+
+	private ensureProjectScan(projectDir: string) {
+		if (this.projectScanTimer) { return; }
+		// Seed with all existing JSONL files so we only react to truly new ones
+		try {
+			const files = fs.readdirSync(projectDir)
+				.filter(f => f.endsWith('.jsonl'))
+				.map(f => path.join(projectDir, f));
+			for (const f of files) {
+				this.knownJsonlFiles.add(f);
+			}
+		} catch { /* dir may not exist yet */ }
+
+		this.projectScanTimer = setInterval(() => {
+			this.scanForNewJsonlFiles(projectDir);
+		}, 1000);
+	}
+
+	private scanForNewJsonlFiles(projectDir: string) {
+		let files: string[];
+		try {
+			files = fs.readdirSync(projectDir)
+				.filter(f => f.endsWith('.jsonl'))
+				.map(f => path.join(projectDir, f));
+		} catch { return; }
+
+		for (const file of files) {
+			if (!this.knownJsonlFiles.has(file)) {
+				this.knownJsonlFiles.add(file);
+				if (this.activeAgentId !== null) {
+					console.log(`[Arcadia] New JSONL detected: ${path.basename(file)}, reassigning to agent ${this.activeAgentId}`);
+					this.reassignAgentToFile(this.activeAgentId, file);
+				}
+			}
+		}
+	}
+
+	private reassignAgentToFile(agentId: number, newFilePath: string) {
+		const agent = this.agents.get(agentId);
+		if (!agent) { return; }
+
+		// Stop old file watching
+		this.fileWatchers.get(agentId)?.close();
+		this.fileWatchers.delete(agentId);
+		const pt = this.pollingTimers.get(agentId);
+		if (pt) { clearInterval(pt); }
+		this.pollingTimers.delete(agentId);
+
+		// Clear activity
+		this.cancelWaitingTimer(agentId);
+		this.clearAgentActivity(agentId);
+
+		// Swap to new file
+		agent.jsonlFile = newFilePath;
+		agent.fileOffset = 0;
+		agent.lineBuffer = '';
+
+		// Start watching new file
+		this.startFileWatching(agentId, newFilePath);
+		this.readNewLines(agentId);
 	}
 
 	private startFileWatching(agentId: number, filePath: string) {
@@ -213,6 +233,11 @@ class ArcadiaViewProvider implements vscode.WebviewViewProvider {
 		const agent = this.agents.get(agentId);
 		if (!agent) { return; }
 
+		// Stop JSONL poll timer
+		const jpTimer = this.jsonlPollTimers.get(agentId);
+		if (jpTimer) { clearInterval(jpTimer); }
+		this.jsonlPollTimers.delete(agentId);
+
 		// Stop file watching
 		this.fileWatchers.get(agentId)?.close();
 		this.fileWatchers.delete(agentId);
@@ -223,31 +248,8 @@ class ArcadiaViewProvider implements vscode.WebviewViewProvider {
 		// Cancel waiting timer
 		this.cancelWaitingTimer(agentId);
 
-		// Unclaim file
-		this.claimedFiles.delete(agent.jsonlFile);
-
 		// Remove from maps
 		this.agents.delete(agentId);
-	}
-
-	private cleanupTerminalScan(terminal: vscode.Terminal) {
-		const timer = this.terminalScanTimers.get(terminal);
-		if (timer) { clearInterval(timer); }
-		this.terminalScanTimers.delete(terminal);
-		this.terminalProjectDirs.delete(terminal);
-	}
-
-	private adoptExistingTerminals() {
-		for (const terminal of vscode.window.terminals) {
-			const match = terminal.name.match(CLAUDE_TERMINAL_PATTERN);
-			if (match) {
-				const idx = parseInt(match[1], 10);
-				if (idx >= this.nextTerminalIndex) {
-					this.nextTerminalIndex = idx + 1;
-				}
-				this.startTerminalFileScan(terminal);
-			}
-		}
 	}
 
 	private sendExistingAgents() {
@@ -286,14 +288,6 @@ class ArcadiaViewProvider implements vscode.WebviewViewProvider {
 				});
 			}
 		}
-	}
-
-	private isTracked(terminal: vscode.Terminal): boolean {
-		if (this.terminalScanTimers.has(terminal)) { return true; }
-		for (const agent of this.agents.values()) {
-			if (agent.terminalRef === terminal) { return true; }
-		}
-		return false;
 	}
 
 	// --- Transcript JSONL reading ---
@@ -471,8 +465,9 @@ class ArcadiaViewProvider implements vscode.WebviewViewProvider {
 		for (const id of [...this.agents.keys()]) {
 			this.removeAgent(id);
 		}
-		for (const [terminal] of this.terminalScanTimers) {
-			this.cleanupTerminalScan(terminal);
+		if (this.projectScanTimer) {
+			clearInterval(this.projectScanTimer);
+			this.projectScanTimer = null;
 		}
 	}
 }

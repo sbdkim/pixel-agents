@@ -79,6 +79,9 @@ function App() {
           delete next[id]
           return next
         })
+      } else if (msg.type === 'agentSelected') {
+        const id = msg.id as number
+        setSelectedAgent(id)
       } else if (msg.type === 'agentStatus') {
         const id = msg.id as number
         const status = msg.status as string
