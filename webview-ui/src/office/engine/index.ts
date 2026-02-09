@@ -10,4 +10,4 @@ export {
   renderGhostPreview,
   renderSelectionHighlight,
 } from './renderer.js'
-export type { EditorRenderState } from './renderer.js'
+export type { EditorRenderState, SelectionRenderState } from './renderer.js'

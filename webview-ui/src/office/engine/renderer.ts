@@ -1,6 +1,6 @@
 import { TileType, TILE_SIZE, MAP_COLS, MAP_ROWS } from '../types.js'
-import type { TileType as TileTypeVal, FurnitureInstance, Character, SpriteData } from '../types.js'
-import { getCachedSprite } from '../sprites/spriteCache.js'
+import type { TileType as TileTypeVal, FurnitureInstance, Character, SpriteData, Seat } from '../types.js'
+import { getCachedSprite, getOutlineSprite } from '../sprites/spriteCache.js'
 import { getCharacterSprites } from '../sprites/spriteData.js'
 import { getCharacterSprite } from './characters.js'
 
@@ -61,6 +61,7 @@ export function renderScene(
   offsetX: number,
   offsetY: number,
   zoom: number,
+  selectedAgentId: number | null,
 ): void {
   const drawables: ZDrawable[] = []
 
@@ -85,6 +86,21 @@ export function renderScene(
     // Anchor at bottom-center of character — round to integer device pixels
     const drawX = Math.round(offsetX + ch.x * zoom - cached.width / 2)
     const drawY = Math.round(offsetY + ch.y * zoom - cached.height)
+
+    // White outline behind selected character
+    if (selectedAgentId !== null && ch.id === selectedAgentId) {
+      const outlineData = getOutlineSprite(spriteData)
+      const outlineCached = getCachedSprite(outlineData, zoom)
+      const olDrawX = drawX - zoom // 1 sprite-pixel offset, scaled
+      const olDrawY = drawY - zoom
+      drawables.push({
+        zY: ch.y - 0.001, // sort just before character
+        draw: (c) => {
+          c.drawImage(outlineCached, olDrawX, olDrawY)
+        },
+      })
+    }
+
     drawables.push({
       zY: ch.y, // sort by feet position
       draw: (c) => {
@@ -98,6 +114,40 @@ export function renderScene(
 
   for (const d of drawables) {
     d.draw(ctx)
+  }
+}
+
+// ── Seat indicators ─────────────────────────────────────────────
+
+export function renderSeatIndicators(
+  ctx: CanvasRenderingContext2D,
+  seats: Map<string, Seat>,
+  characters: Map<number, Character>,
+  selectedAgentId: number | null,
+  offsetX: number,
+  offsetY: number,
+  zoom: number,
+): void {
+  if (selectedAgentId === null) return
+  const selectedChar = characters.get(selectedAgentId)
+  if (!selectedChar) return
+
+  const s = TILE_SIZE * zoom
+  const pulseAlpha = Math.sin(performance.now() / 500) * 0.1 + 0.25
+
+  for (const [uid, seat] of seats) {
+    const x = offsetX + seat.seatCol * s
+    const y = offsetY + seat.seatRow * s
+
+    if (selectedChar.seatId === uid) {
+      // Current seat — blue overlay
+      ctx.fillStyle = 'rgba(0, 127, 212, 0.3)'
+      ctx.fillRect(x, y, s, s)
+    } else if (!seat.assigned) {
+      // Available seat — green pulsing overlay
+      ctx.fillStyle = `rgba(0, 200, 80, ${pulseAlpha})`
+      ctx.fillRect(x, y, s, s)
+    }
   }
 }
 
@@ -185,6 +235,12 @@ export interface EditorRenderState {
   hasSelection: boolean
 }
 
+export interface SelectionRenderState {
+  selectedAgentId: number | null
+  seats: Map<string, Seat>
+  characters: Map<number, Character>
+}
+
 export function renderFrame(
   ctx: CanvasRenderingContext2D,
   canvasWidth: number,
@@ -195,6 +251,7 @@ export function renderFrame(
   zoom: number,
   panX: number,
   panY: number,
+  selection?: SelectionRenderState,
   editor?: EditorRenderState,
 ): { offsetX: number; offsetY: number } {
   // Clear
@@ -209,8 +266,14 @@ export function renderFrame(
   // Draw tiles
   renderTileGrid(ctx, tileMap, offsetX, offsetY, zoom)
 
+  // Seat indicators (below furniture/characters, on top of floor)
+  if (selection) {
+    renderSeatIndicators(ctx, selection.seats, selection.characters, selection.selectedAgentId, offsetX, offsetY, zoom)
+  }
+
   // Draw furniture + characters (z-sorted)
-  renderScene(ctx, furniture, characters, offsetX, offsetY, zoom)
+  const selectedId = selection?.selectedAgentId ?? null
+  renderScene(ctx, furniture, characters, offsetX, offsetY, zoom, selectedId)
 
   // Editor overlays
   if (editor) {

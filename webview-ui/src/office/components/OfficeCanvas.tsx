@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback } from 'react'
 import type { OfficeState } from '../engine/officeState.js'
 import type { EditorState } from '../editor/editorState.js'
-import type { EditorRenderState } from '../engine/renderer.js'
+import type { EditorRenderState, SelectionRenderState } from '../engine/renderer.js'
 import { startGameLoop } from '../engine/gameLoop.js'
 import { renderFrame } from '../engine/renderer.js'
 import { TILE_SIZE, MAP_COLS, MAP_ROWS, EditTool } from '../types.js'
@@ -109,6 +109,13 @@ export function OfficeCanvas({ officeState, onHover, onClick, isEditMode, editor
           }
         }
 
+        // Build selection render state
+        const selectionRender: SelectionRenderState = {
+          selectedAgentId: officeState.selectedAgentId,
+          seats: officeState.seats,
+          characters: officeState.characters,
+        }
+
         const { offsetX, offsetY } = renderFrame(
           ctx,
           w,
@@ -119,6 +126,7 @@ export function OfficeCanvas({ officeState, onHover, onClick, isEditMode, editor
           zoom,
           panRef.current.x,
           panRef.current.y,
+          selectionRender,
           editorRender,
         )
         offsetRef.current = { x: offsetX, y: offsetY }
@@ -203,7 +211,23 @@ export function OfficeCanvas({ officeState, onHover, onClick, isEditMode, editor
       const hitId = officeState.getCharacterAt(pos.worldX, pos.worldY)
       const canvas = canvasRef.current
       if (canvas) {
-        canvas.style.cursor = hitId !== null ? 'pointer' : 'default'
+        let cursor = 'default'
+        if (hitId !== null) {
+          cursor = 'pointer'
+        } else if (officeState.selectedAgentId !== null) {
+          // Check if hovering over an available seat
+          const tile = screenToTile(e.clientX, e.clientY)
+          if (tile) {
+            const seatId = officeState.getSeatAtTile(tile.col, tile.row)
+            if (seatId) {
+              const seat = officeState.seats.get(seatId)
+              if (seat && !seat.assigned) {
+                cursor = 'pointer'
+              }
+            }
+          }
+        }
+        canvas.style.cursor = cursor
       }
       const containerRect = containerRef.current?.getBoundingClientRect()
       const relX = containerRect ? e.clientX - containerRect.left : pos.screenX
@@ -258,12 +282,38 @@ export function OfficeCanvas({ officeState, onHover, onClick, isEditMode, editor
       if (isEditMode) return // handled by mouseDown
       const pos = screenToWorld(e.clientX, e.clientY)
       if (!pos) return
+
       const hitId = officeState.getCharacterAt(pos.worldX, pos.worldY)
       if (hitId !== null) {
-        onClick(hitId)
+        // Toggle selection: click same agent deselects, different agent selects
+        if (officeState.selectedAgentId === hitId) {
+          officeState.selectedAgentId = null
+        } else {
+          officeState.selectedAgentId = hitId
+        }
+        onClick(hitId) // still focus terminal
+        return
+      }
+
+      // No agent hit — check seat click while agent is selected
+      if (officeState.selectedAgentId !== null) {
+        const tile = screenToTile(e.clientX, e.clientY)
+        if (tile) {
+          const seatId = officeState.getSeatAtTile(tile.col, tile.row)
+          if (seatId) {
+            const seat = officeState.seats.get(seatId)
+            if (seat && !seat.assigned) {
+              officeState.reassignSeat(officeState.selectedAgentId, seatId)
+              officeState.selectedAgentId = null
+              return
+            }
+          }
+        }
+        // Clicked empty space — deselect
+        officeState.selectedAgentId = null
       }
     },
-    [officeState, onClick, screenToWorld, isEditMode],
+    [officeState, onClick, screenToWorld, screenToTile, isEditMode],
   )
 
   const handleMouseLeave = useCallback(() => {

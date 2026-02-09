@@ -29,16 +29,14 @@ export type Direction = (typeof Direction)[keyof typeof Direction]
 /** 2D array of hex color strings (or '' for transparent). [row][col] */
 export type SpriteData = string[][]
 
-export interface DeskSlot {
-  /** Top-left tile column of 2x2 desk */
-  deskCol: number
-  /** Top-left tile row of 2x2 desk */
-  deskRow: number
-  /** Tile column of chair position */
-  chairCol: number
-  /** Tile row of chair position */
-  chairRow: number
-  /** Direction character faces when sitting (toward desk center) */
+export interface Seat {
+  /** Chair furniture uid */
+  uid: string
+  /** Tile col where agent sits */
+  seatCol: number
+  /** Tile row where agent sits */
+  seatRow: number
+  /** Direction character faces when sitting (toward adjacent desk) */
   facingDir: Direction
   assigned: boolean
 }
@@ -150,6 +148,6 @@ export interface Character {
   wanderTimer: number
   /** Whether the agent is actively working */
   isActive: boolean
-  /** Assigned desk slot index, or -1 */
-  deskSlot: number
+  /** Assigned seat uid, or null if no seat */
+  seatId: string | null
 }

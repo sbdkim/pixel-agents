@@ -1,4 +1,4 @@
-export { getCachedSprite } from './spriteCache.js'
+export { getCachedSprite, getOutlineSprite } from './spriteCache.js'
 export {
   DESK_SQUARE_SPRITE,
   BOOKSHELF_SPRITE,

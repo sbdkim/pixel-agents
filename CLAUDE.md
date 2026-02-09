@@ -151,7 +151,7 @@ office/
 
   sprites/              — Pixel art data + caching (pure data, no game logic)
     spriteData.ts       — Hardcoded pixel data for characters (6 palettes), furniture, tiles
-    spriteCache.ts      — Renders SpriteData → offscreen canvas, per-zoom WeakMap cache
+    spriteCache.ts      — Renders SpriteData → offscreen canvas, per-zoom WeakMap cache; getOutlineSprite() for selection glow
     index.ts            — Barrel re-exports
 
   editor/               — Layout editing tools, state, and UI
@@ -162,26 +162,26 @@ office/
 
   layout/               — Layout data model, serialization, spatial queries, pathfinding
     furnitureCatalog.ts — FurnitureType → sprite/footprint/isDesk catalog + getCatalogEntry()
-    layoutSerializer.ts — OfficeLayout ↔ runtime conversion (tileMap, furniture instances, desk slots, blocked tiles)
-    tileMap.ts          — Office layout grid, desk slot positions, furniture placement, pathfinding
+    layoutSerializer.ts — OfficeLayout ↔ runtime conversion (tileMap, furniture instances, seats, blocked tiles)
+    tileMap.ts          — Walkability checks, pathfinding (BFS)
     index.ts            — Barrel re-exports
 
   engine/               — Character state machine, game world, game loop, rendering
-    characters.ts       — Character state machine: idle/walk/type + wander AI (handles deskSlot=-1)
-    officeState.ts      — Central game world: layout-aware construction, rebuildFromLayout(), character lifecycle
+    characters.ts       — Character state machine: idle/walk/type + wander AI (handles seatId=null)
+    officeState.ts      — Central game world: layout-aware construction, rebuildFromLayout(), character lifecycle, agent selection + seat reassignment
     gameLoop.ts         — requestAnimationFrame loop with delta time (capped at 0.1s)
-    renderer.ts         — Canvas drawing: tiles, z-sorted furniture + characters, edit overlays
+    renderer.ts         — Canvas drawing: tiles, z-sorted furniture + characters, selection outline + seat indicators, edit overlays
     index.ts            — Barrel re-exports
 
   components/           — React components that render the office
-    OfficeCanvas.tsx    — Canvas ref, ResizeObserver, DPR, mouse hit-testing, edit mode interactions
+    OfficeCanvas.tsx    — Canvas ref, ResizeObserver, DPR, mouse hit-testing, agent selection/deselection, seat click reassignment, edit mode interactions
     ToolOverlay.tsx     — HTML tooltip positioned over hovered character showing tool status
     index.ts            — Barrel re-exports
 ```
 
 ### How rendering works
 
-**Game state outside React**: An `OfficeState` class (created lazily on `layoutLoaded`, stored in `officeStateRef`) holds the `OfficeLayout`, derived tile map, furniture instances, desk slots, and character state. It's updated imperatively by message handlers and read by the canvas every frame. React state is only used for HTML overlays (tool tooltips, editor toolbar). This avoids re-renders in the hot path.
+**Game state outside React**: An `OfficeState` class (created lazily on `layoutLoaded`, stored in `officeStateRef`) holds the `OfficeLayout`, derived tile map, furniture instances, seats, character state, and `selectedAgentId`. It's updated imperatively by message handlers and read by the canvas every frame. React state is only used for HTML overlays (tool tooltips, editor toolbar). This avoids re-renders in the hot path.
 
 **Pixel-perfect rendering**: All rendering is done directly in device pixels — no `ctx.scale(dpr)` transform. The `zoom` level is an integer (device pixels per sprite pixel), ensuring every sprite pixel maps to exactly NxN device pixels with no fractional coordinates. Default zoom = `Math.round(2 * devicePixelRatio)`. Users can zoom in/out via Ctrl+mousewheel or +/- buttons (range 1x–10x). The sprite cache (`spriteCache.ts`) stores per-zoom WeakMaps so different zoom levels (e.g., toolbar thumbnails at 2x vs canvas at dynamic zoom) don't thrash each other.
 
@@ -216,13 +216,13 @@ Keyboard       → useEditorKeyboard hook → delegates to useEditorActions call
 - **Active (working)**: Character pathfinds (BFS) to assigned chair tile, sits down facing the desk, plays typing or reading animation depending on the active tool. Triggered by `agentToolStart` or `agentStatus: 'active'`.
 - **Idle (waiting)**: Character stands up from desk, wanders to random walkable tiles via BFS pathfinding with 2-5s pauses between moves. Triggered by `agentStatus: 'waiting'`. Walk animation has 4 frames per direction.
 - **Created**: Spawns at desk in typing state (assumes new agents are immediately active).
-- **Removed**: Character disappears, desk slot freed for next agent.
+- **Removed**: Character disappears, seat freed for next agent.
 
 ### Movement system
 
 **Tile-based**: Characters move on a grid, one tile at a time in cardinal directions (no diagonals). BFS pathfinding navigates around walls, desks, and through doorways. Each step lerps pixel position from one tile center to the next.
 
-**4-directional sprites**: All states (idle, walk, typing, reading) have sprites for all 4 directions (down, up, left, right). Left sprites are generated by flipping right sprites horizontally. Direction is set by the current path step when walking, and by the desk slot's `facingDir` when sitting.
+**4-directional sprites**: All states (idle, walk, typing, reading) have sprites for all 4 directions (down, up, left, right). Left sprites are generated by flipping right sprites horizontally. Direction is set by the current path step when walking, and by the seat's `facingDir` when sitting.
 
 **Tool-specific animations**: At desk, characters show either:
 - **Typing** animation (arms on keyboard): Write, Edit, Bash, NotebookEdit, Task, and unknown tools
@@ -238,15 +238,15 @@ Two rooms connected by a doorway (col 10, rows 4-6):
 - **Break area** (purple carpet): bottom-right corner of right room
 - Walls around perimeter + center divider
 
-### Desk system
+### Seat system
 
-Each desk is 2x2 tiles with 4 chair positions (one per side), facing toward the desk center:
-- **Top chair**: 1 tile above desk, facing DOWN
-- **Bottom chair**: 1 tile below desk, facing UP
-- **Left chair**: 1 tile left of desk, facing RIGHT
-- **Right chair**: 1 tile right of desk, facing LEFT
+Seats are derived from **chair furniture** placed adjacent to desks. `layoutToSeats()` scans all furniture with `category: 'chairs'`, checks cardinal neighbors for desk tiles, and generates a `Seat` with the correct `facingDir` (toward the adjacent desk). Each `Seat` is keyed by the chair furniture's `uid` in a `Map<string, Seat>`.
 
-2 desks × 4 chairs = 8 slots total (supports up to 8 agents; 6 palettes cycle).
+The default layout has 2 desks (2x2 tiles each) with 4 chairs around each = 8 seats total (6 palettes cycle). Users can add/remove chairs in the layout editor to change available seats.
+
+**Seat fields**: `uid` (chair furniture uid), `seatCol`, `seatRow` (tile where agent sits), `facingDir` (toward desk), `assigned` (boolean).
+
+**Agent selection + seat reassignment**: Click a character to select it (white pixel-perfect outline glow). Seat indicators appear: blue overlay on current seat, green pulsing overlay on available (unassigned) seats. Click an available seat to reassign the agent — they walk to their new seat. Click empty space or the same agent again to deselect. Selection clears automatically when an agent is removed.
 
 ### Office Layout Editor
 
@@ -263,18 +263,19 @@ Toggle-based edit mode for customizing the office layout:
 
 **Layout data model**: `OfficeLayout` = `{ version: 1, cols, rows, tiles: TileType[], furniture: PlacedFurniture[] }`. Flat tile array (row-major). Each `PlacedFurniture` has `uid`, `type`, `col`, `row`.
 
-**Persistence**: Layout saved to `workspaceState` key `'arcadia.layout'` via debounced (500ms) `saveLayout` message. On `webviewReady`, extension sends `layoutLoaded { layout }` to webview. `OfficeState.rebuildFromLayout()` rebuilds all derived state (tileMap, furniture instances, desk slots, blocked tiles, walkable tiles) and reassigns characters to available desks.
+**Persistence**: Layout saved to `workspaceState` key `'arcadia.layout'` via debounced (500ms) `saveLayout` message. On `webviewReady`, extension sends `layoutLoaded { layout }` to webview. `OfficeState.rebuildFromLayout()` rebuilds all derived state (tileMap, furniture instances, seats, blocked tiles, walkable tiles) and reassigns characters to available seats.
 
-**No-desk behavior**: When all desk slots are taken or no desks exist, agents get `deskSlot = -1` and type in place (no pathfinding to desk). When idle, they wander normally.
+**No-seat behavior**: When all seats are taken or no chairs exist, agents get `seatId = null` and type in place (no pathfinding to desk). When idle, they wander normally.
 
-**Furniture catalog**: `layout/furnitureCatalog.ts` maps each `FurnitureType` to sprite, footprint size, and `isDesk` flag. `layout/layoutSerializer.ts` generates desk slots dynamically from placed desk furniture.
+**Furniture catalog**: `layout/furnitureCatalog.ts` maps each `FurnitureType` to sprite, footprint size, `isDesk` flag, and `category`. `layout/layoutSerializer.ts` generates seats dynamically from chair furniture adjacent to desks.
 
 **Edit mode rendering**: Grid overlay (subtle white lines), ghost preview (semi-transparent sprite with green/red validity tint), selection highlight (dashed blue border). Characters keep animating during editing.
 
 ### Interaction
 
 - **Hover** character → `ToolOverlay` tooltip appears showing agent name, active tools (blue pulsing dot), completed tools (green dot, dimmed), permission waits (amber), subagent tools (nested)
-- **Click** character → sends `focusAgent` message to extension, which focuses the terminal
+- **Click** character → toggles selection (white outline glow + seat indicators) AND sends `focusAgent` to focus terminal. Click same agent again to deselect. Click empty space to deselect.
+- **Click available seat** (while agent selected) → reassigns agent to that seat, agent walks there, selection clears
 - **Name labels** float above each character with status dot (blue pulse = active, amber = waiting)
 - **"+ Agent" button** (top-left) creates new terminal + character
 - **"Sessions" button** opens JSONL folder in file explorer

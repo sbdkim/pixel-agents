@@ -1,5 +1,5 @@
 import { CharacterState, Direction, TILE_SIZE } from '../types.js'
-import type { Character, DeskSlot, SpriteData, TileType as TileTypeVal } from '../types.js'
+import type { Character, Seat, SpriteData, TileType as TileTypeVal } from '../types.js'
 import type { CharacterSprites } from '../sprites/spriteData.js'
 import { findPath } from '../layout/tileMap.js'
 
@@ -39,18 +39,20 @@ function directionBetween(fromCol: number, fromRow: number, toCol: number, toRow
 export function createCharacter(
   id: number,
   palette: number,
-  deskSlot: number,
-  slot: DeskSlot,
+  seatId: string | null,
+  seat: Seat | null,
 ): Character {
-  const center = tileCenter(slot.chairCol, slot.chairRow)
+  const col = seat ? seat.seatCol : 1
+  const row = seat ? seat.seatRow : 1
+  const center = tileCenter(col, row)
   return {
     id,
     state: CharacterState.TYPE,
-    dir: slot.facingDir,
+    dir: seat ? seat.facingDir : Direction.DOWN,
     x: center.x,
     y: center.y,
-    tileCol: slot.chairCol,
-    tileRow: slot.chairRow,
+    tileCol: col,
+    tileRow: row,
     path: [],
     moveProgress: 0,
     currentTool: null,
@@ -59,7 +61,7 @@ export function createCharacter(
     frameTimer: 0,
     wanderTimer: 0,
     isActive: true,
-    deskSlot,
+    seatId,
   }
 }
 
@@ -67,7 +69,7 @@ export function updateCharacter(
   ch: Character,
   dt: number,
   walkableTiles: Array<{ col: number; row: number }>,
-  deskSlots: DeskSlot[],
+  seats: Map<string, Seat>,
   tileMap: TileTypeVal[][],
   blockedTiles: Set<string>,
 ): void {
@@ -94,18 +96,18 @@ export function updateCharacter(
         ch.frameTimer -= IDLE_FRAME_DURATION
         ch.frame = (ch.frame + 1) % 2
       }
-      // If became active, pathfind to desk chair
+      // If became active, pathfind to seat
       if (ch.isActive) {
-        if (ch.deskSlot === -1) {
-          // No desk assigned — type in place
+        if (!ch.seatId) {
+          // No seat assigned — type in place
           ch.state = CharacterState.TYPE
           ch.frame = 0
           ch.frameTimer = 0
           break
         }
-        const slot = deskSlots[ch.deskSlot]
-        if (slot) {
-          const path = findPath(ch.tileCol, ch.tileRow, slot.chairCol, slot.chairRow, tileMap, blockedTiles)
+        const seat = seats.get(ch.seatId)
+        if (seat) {
+          const path = findPath(ch.tileCol, ch.tileRow, seat.seatCol, seat.seatRow, tileMap, blockedTiles)
           if (path.length > 0) {
             ch.path = path
             ch.moveProgress = 0
@@ -113,9 +115,9 @@ export function updateCharacter(
             ch.frame = 0
             ch.frameTimer = 0
           } else {
-            // Already at desk or no path — sit down
+            // Already at seat or no path — sit down
             ch.state = CharacterState.TYPE
-            ch.dir = slot.facingDir
+            ch.dir = seat.facingDir
             ch.frame = 0
             ch.frameTimer = 0
           }
@@ -155,14 +157,14 @@ export function updateCharacter(
         ch.y = center.y
 
         if (ch.isActive) {
-          if (ch.deskSlot === -1) {
-            // No desk — type in place
+          if (!ch.seatId) {
+            // No seat — type in place
             ch.state = CharacterState.TYPE
           } else {
-            const slot = deskSlots[ch.deskSlot]
-            if (slot && ch.tileCol === slot.chairCol && ch.tileRow === slot.chairRow) {
+            const seat = seats.get(ch.seatId)
+            if (seat && ch.tileCol === seat.seatCol && ch.tileRow === seat.seatRow) {
               ch.state = CharacterState.TYPE
-              ch.dir = slot.facingDir
+              ch.dir = seat.facingDir
             } else {
               ch.state = CharacterState.IDLE
             }
@@ -198,13 +200,13 @@ export function updateCharacter(
         ch.moveProgress = 0
       }
 
-      // If became active while wandering, repath to desk
-      if (ch.isActive && ch.deskSlot >= 0) {
-        const slot = deskSlots[ch.deskSlot]
-        if (slot) {
+      // If became active while wandering, repath to seat
+      if (ch.isActive && ch.seatId) {
+        const seat = seats.get(ch.seatId)
+        if (seat) {
           const lastStep = ch.path[ch.path.length - 1]
-          if (!lastStep || lastStep.col !== slot.chairCol || lastStep.row !== slot.chairRow) {
-            const newPath = findPath(ch.tileCol, ch.tileRow, slot.chairCol, slot.chairRow, tileMap, blockedTiles)
+          if (!lastStep || lastStep.col !== seat.seatCol || lastStep.row !== seat.seatRow) {
+            const newPath = findPath(ch.tileCol, ch.tileRow, seat.seatCol, seat.seatRow, tileMap, blockedTiles)
             if (newPath.length > 0) {
               ch.path = newPath
               ch.moveProgress = 0

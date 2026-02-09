@@ -1,5 +1,5 @@
 import { TileType, FurnitureType, MAP_COLS, MAP_ROWS, TILE_SIZE, Direction } from '../types.js'
-import type { TileType as TileTypeVal, OfficeLayout, PlacedFurniture, DeskSlot, FurnitureInstance } from '../types.js'
+import type { TileType as TileTypeVal, OfficeLayout, PlacedFurniture, Seat, FurnitureInstance } from '../types.js'
 import { getCatalogEntry } from './furnitureCatalog.js'
 
 /** Convert flat tile array from layout into 2D grid */
@@ -34,66 +34,86 @@ export function layoutToFurnitureInstances(furniture: PlacedFurniture[]): Furnit
   return instances
 }
 
-/** Get all tiles blocked by furniture footprints */
-export function getBlockedTiles(furniture: PlacedFurniture[]): Set<string> {
+/** Get all tiles blocked by furniture footprints, optionally excluding a set of tiles */
+export function getBlockedTiles(furniture: PlacedFurniture[], excludeTiles?: Set<string>): Set<string> {
   const tiles = new Set<string>()
   for (const item of furniture) {
     const entry = getCatalogEntry(item.type)
     if (!entry) continue
     for (let dr = 0; dr < entry.footprintH; dr++) {
       for (let dc = 0; dc < entry.footprintW; dc++) {
-        tiles.add(`${item.col + dc},${item.row + dr}`)
+        const key = `${item.col + dc},${item.row + dr}`
+        if (excludeTiles && excludeTiles.has(key)) continue
+        tiles.add(key)
       }
     }
   }
   return tiles
 }
 
-/** Generate desk slots from any furniture with isDesk=true */
-export function layoutToDeskSlots(furniture: PlacedFurniture[], blockedTiles: Set<string>): DeskSlot[] {
-  const slots: DeskSlot[] = []
+/** Generate seats from chair furniture placed adjacent to desks */
+export function layoutToSeats(furniture: PlacedFurniture[]): Map<string, Seat> {
+  const seats = new Map<string, Seat>()
+
+  // Build set of all desk tiles
+  const deskTiles = new Set<string>()
   for (const item of furniture) {
     const entry = getCatalogEntry(item.type)
     if (!entry || !entry.isDesk) continue
-
-    const fw = entry.footprintW
-    const fh = entry.footprintH
-
-    // Generate chair positions along each edge of the desk
-    const candidates: Array<{ chairCol: number; chairRow: number; facingDir: Direction }> = []
-
-    // Top edge: chairs above the desk, facing DOWN
-    for (let dc = 0; dc < fw; dc++) {
-      candidates.push({ chairCol: item.col + dc, chairRow: item.row - 1, facingDir: Direction.DOWN })
-    }
-    // Bottom edge: chairs below the desk, facing UP
-    for (let dc = 0; dc < fw; dc++) {
-      candidates.push({ chairCol: item.col + dc, chairRow: item.row + fh, facingDir: Direction.UP })
-    }
-    // Left edge: chairs left of desk, facing RIGHT
-    for (let dr = 0; dr < fh; dr++) {
-      candidates.push({ chairCol: item.col - 1, chairRow: item.row + dr, facingDir: Direction.RIGHT })
-    }
-    // Right edge: chairs right of desk, facing LEFT
-    for (let dr = 0; dr < fh; dr++) {
-      candidates.push({ chairCol: item.col + fw, chairRow: item.row + dr, facingDir: Direction.LEFT })
-    }
-
-    for (const c of candidates) {
-      // Chair tile must be in bounds and not blocked
-      if (c.chairCol < 0 || c.chairCol >= MAP_COLS || c.chairRow < 0 || c.chairRow >= MAP_ROWS) continue
-      if (blockedTiles.has(`${c.chairCol},${c.chairRow}`)) continue
-      slots.push({
-        deskCol: item.col,
-        deskRow: item.row,
-        chairCol: c.chairCol,
-        chairRow: c.chairRow,
-        facingDir: c.facingDir,
-        assigned: false,
-      })
+    for (let dr = 0; dr < entry.footprintH; dr++) {
+      for (let dc = 0; dc < entry.footprintW; dc++) {
+        deskTiles.add(`${item.col + dc},${item.row + dr}`)
+      }
     }
   }
-  return slots
+
+  const dirs: Array<{ dc: number; dr: number; facing: Direction }> = [
+    { dc: 0, dr: -1, facing: Direction.UP },    // desk is above chair → face UP
+    { dc: 0, dr: 1, facing: Direction.DOWN },   // desk is below chair → face DOWN
+    { dc: -1, dr: 0, facing: Direction.LEFT },   // desk is left of chair → face LEFT
+    { dc: 1, dr: 0, facing: Direction.RIGHT },   // desk is right of chair → face RIGHT
+  ]
+
+  // For each chair furniture, check adjacency to desks
+  for (const item of furniture) {
+    const entry = getCatalogEntry(item.type)
+    if (!entry || entry.category !== 'chairs') continue
+
+    let found = false
+    // Iterate all footprint tiles of this chair
+    for (let dr = 0; dr < entry.footprintH && !found; dr++) {
+      for (let dc = 0; dc < entry.footprintW && !found; dc++) {
+        const tileCol = item.col + dc
+        const tileRow = item.row + dr
+        // Check 4 cardinal neighbors for desk tiles
+        for (const d of dirs) {
+          const neighborKey = `${tileCol + d.dc},${tileRow + d.dr}`
+          if (deskTiles.has(neighborKey)) {
+            seats.set(item.uid, {
+              uid: item.uid,
+              seatCol: tileCol,
+              seatRow: tileRow,
+              facingDir: d.facing,
+              assigned: false,
+            })
+            found = true
+            break
+          }
+        }
+      }
+    }
+  }
+
+  return seats
+}
+
+/** Get the set of tiles occupied by seats (so they can be excluded from blocked tiles) */
+export function getSeatTiles(seats: Map<string, Seat>): Set<string> {
+  const tiles = new Set<string>()
+  for (const seat of seats.values()) {
+    tiles.add(`${seat.seatCol},${seat.seatRow}`)
+  }
+  return tiles
 }
 
 /** Create the default office layout matching the current hardcoded office */
@@ -123,6 +143,16 @@ export function createDefaultLayout(): OfficeLayout {
     { uid: 'cooler-1', type: FurnitureType.COOLER, col: 17, row: 7 },
     { uid: 'plant-right', type: FurnitureType.PLANT, col: 18, row: 1 },
     { uid: 'whiteboard-1', type: FurnitureType.WHITEBOARD, col: 15, row: 0 },
+    // Left desk chairs
+    { uid: 'chair-l-top', type: FurnitureType.CHAIR, col: 4, row: 2 },
+    { uid: 'chair-l-bottom', type: FurnitureType.CHAIR, col: 5, row: 5 },
+    { uid: 'chair-l-left', type: FurnitureType.CHAIR, col: 3, row: 4 },
+    { uid: 'chair-l-right', type: FurnitureType.CHAIR, col: 6, row: 3 },
+    // Right desk chairs
+    { uid: 'chair-r-top', type: FurnitureType.CHAIR, col: 13, row: 2 },
+    { uid: 'chair-r-bottom', type: FurnitureType.CHAIR, col: 14, row: 5 },
+    { uid: 'chair-r-left', type: FurnitureType.CHAIR, col: 12, row: 4 },
+    { uid: 'chair-r-right', type: FurnitureType.CHAIR, col: 15, row: 3 },
   ]
 
   return { version: 1, cols: MAP_COLS, rows: MAP_ROWS, tiles, furniture }

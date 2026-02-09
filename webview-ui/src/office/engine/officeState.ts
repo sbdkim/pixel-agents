@@ -1,31 +1,34 @@
-import { TILE_SIZE } from '../types.js'
-import type { Character, DeskSlot, FurnitureInstance, TileType as TileTypeVal, OfficeLayout } from '../types.js'
+import { TILE_SIZE, CharacterState } from '../types.js'
+import type { Character, Seat, FurnitureInstance, TileType as TileTypeVal, OfficeLayout } from '../types.js'
 import { createCharacter, updateCharacter } from './characters.js'
 import { getWalkableTiles } from '../layout/tileMap.js'
 import {
   createDefaultLayout,
   layoutToTileMap,
   layoutToFurnitureInstances,
-  layoutToDeskSlots,
+  layoutToSeats,
+  getSeatTiles,
   getBlockedTiles,
 } from '../layout/layoutSerializer.js'
 
 export class OfficeState {
   layout: OfficeLayout
   tileMap: TileTypeVal[][]
-  deskSlots: DeskSlot[]
+  seats: Map<string, Seat>
   blockedTiles: Set<string>
   furniture: FurnitureInstance[]
   walkableTiles: Array<{ col: number; row: number }>
   characters: Map<number, Character> = new Map()
+  selectedAgentId: number | null = null
   private nextPalette = 0
 
   constructor(layout?: OfficeLayout) {
     this.layout = layout || createDefaultLayout()
     this.tileMap = layoutToTileMap(this.layout)
-    this.blockedTiles = getBlockedTiles(this.layout.furniture)
+    this.seats = layoutToSeats(this.layout.furniture)
+    const seatTiles = getSeatTiles(this.seats)
+    this.blockedTiles = getBlockedTiles(this.layout.furniture, seatTiles)
     this.furniture = layoutToFurnitureInstances(this.layout.furniture)
-    this.deskSlots = layoutToDeskSlots(this.layout.furniture, this.blockedTiles)
     this.walkableTiles = getWalkableTiles(this.tileMap, this.blockedTiles)
   }
 
@@ -33,33 +36,25 @@ export class OfficeState {
   rebuildFromLayout(layout: OfficeLayout): void {
     this.layout = layout
     this.tileMap = layoutToTileMap(layout)
-    this.blockedTiles = getBlockedTiles(layout.furniture)
+    this.seats = layoutToSeats(layout.furniture)
+    const seatTiles = getSeatTiles(this.seats)
+    this.blockedTiles = getBlockedTiles(layout.furniture, seatTiles)
     this.furniture = layoutToFurnitureInstances(layout.furniture)
-    this.deskSlots = layoutToDeskSlots(layout.furniture, this.blockedTiles)
     this.walkableTiles = getWalkableTiles(this.tileMap, this.blockedTiles)
 
-    // Reassign characters to new desk slots
-    // First, clear all slot assignments
-    for (const slot of this.deskSlots) {
-      slot.assigned = false
+    // Reassign characters to new seats
+    // First, clear all seat assignments
+    for (const seat of this.seats.values()) {
+      seat.assigned = false
     }
 
     for (const ch of this.characters.values()) {
-      // Try to assign to a free desk slot
-      let slotIndex = -1
-      for (let i = 0; i < this.deskSlots.length; i++) {
-        if (!this.deskSlots[i].assigned) {
-          slotIndex = i
-          break
-        }
-      }
-
-      if (slotIndex >= 0) {
-        this.deskSlots[slotIndex].assigned = true
-        ch.deskSlot = slotIndex
+      const seatId = this.findFreeSeat()
+      if (seatId) {
+        this.seats.get(seatId)!.assigned = true
+        ch.seatId = seatId
       } else {
-        // No desks available — wander
-        ch.deskSlot = -1
+        ch.seatId = null
       }
     }
   }
@@ -68,48 +63,35 @@ export class OfficeState {
     return this.layout
   }
 
+  private findFreeSeat(): string | null {
+    for (const [uid, seat] of this.seats) {
+      if (!seat.assigned) return uid
+    }
+    return null
+  }
+
   addAgent(id: number): void {
     if (this.characters.has(id)) return
-
-    // Find first unassigned desk
-    let slotIndex = -1
-    for (let i = 0; i < this.deskSlots.length; i++) {
-      if (!this.deskSlots[i].assigned) {
-        slotIndex = i
-        break
-      }
-    }
 
     const palette = this.nextPalette % 6
     this.nextPalette++
 
-    if (slotIndex >= 0) {
-      this.deskSlots[slotIndex].assigned = true
-      const ch = createCharacter(id, palette, slotIndex, this.deskSlots[slotIndex])
+    const seatId = this.findFreeSeat()
+    if (seatId) {
+      const seat = this.seats.get(seatId)!
+      seat.assigned = true
+      const ch = createCharacter(id, palette, seatId, seat)
       this.characters.set(id, ch)
     } else {
-      // No desks — spawn at random walkable tile, set deskSlot = -1
+      // No seats — spawn at random walkable tile
       const spawn = this.walkableTiles.length > 0
         ? this.walkableTiles[Math.floor(Math.random() * this.walkableTiles.length)]
         : { col: 1, row: 1 }
-      const ch: Character = {
-        id,
-        state: 'type' as const,
-        dir: 0 as const,
-        x: spawn.col * TILE_SIZE + TILE_SIZE / 2,
-        y: spawn.row * TILE_SIZE + TILE_SIZE / 2,
-        tileCol: spawn.col,
-        tileRow: spawn.row,
-        path: [],
-        moveProgress: 0,
-        currentTool: null,
-        palette,
-        frame: 0,
-        frameTimer: 0,
-        wanderTimer: 0,
-        isActive: true,
-        deskSlot: -1,
-      }
+      const ch = createCharacter(id, palette, null, null)
+      ch.x = spawn.col * TILE_SIZE + TILE_SIZE / 2
+      ch.y = spawn.row * TILE_SIZE + TILE_SIZE / 2
+      ch.tileCol = spawn.col
+      ch.tileRow = spawn.row
       this.characters.set(id, ch)
     }
   }
@@ -117,10 +99,42 @@ export class OfficeState {
   removeAgent(id: number): void {
     const ch = this.characters.get(id)
     if (!ch) return
-    if (ch.deskSlot >= 0 && ch.deskSlot < this.deskSlots.length) {
-      this.deskSlots[ch.deskSlot].assigned = false
+    if (ch.seatId) {
+      const seat = this.seats.get(ch.seatId)
+      if (seat) seat.assigned = false
     }
     this.characters.delete(id)
+    if (this.selectedAgentId === id) this.selectedAgentId = null
+  }
+
+  /** Find seat uid at a given tile position, or null */
+  getSeatAtTile(col: number, row: number): string | null {
+    for (const [uid, seat] of this.seats) {
+      if (seat.seatCol === col && seat.seatRow === row) return uid
+    }
+    return null
+  }
+
+  /** Reassign an agent from their current seat to a new seat */
+  reassignSeat(agentId: number, seatId: string): void {
+    const ch = this.characters.get(agentId)
+    if (!ch) return
+    // Unassign old seat
+    if (ch.seatId) {
+      const old = this.seats.get(ch.seatId)
+      if (old) old.assigned = false
+    }
+    // Assign new seat
+    const seat = this.seats.get(seatId)
+    if (!seat || seat.assigned) return
+    seat.assigned = true
+    ch.seatId = seatId
+    // Kick out of TYPE/IDLE state so character walks to new seat
+    if (ch.state === CharacterState.TYPE || ch.state === CharacterState.IDLE) {
+      ch.state = CharacterState.IDLE
+      ch.frame = 0
+      ch.frameTimer = 0
+    }
   }
 
   setAgentActive(id: number, active: boolean): void {
@@ -139,7 +153,7 @@ export class OfficeState {
 
   update(dt: number): void {
     for (const ch of this.characters.values()) {
-      updateCharacter(ch, dt, this.walkableTiles, this.deskSlots, this.tileMap, this.blockedTiles)
+      updateCharacter(ch, dt, this.walkableTiles, this.seats, this.tileMap, this.blockedTiles)
     }
   }
 

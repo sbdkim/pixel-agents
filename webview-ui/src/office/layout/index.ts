@@ -4,16 +4,13 @@ export {
   layoutToTileMap,
   layoutToFurnitureInstances,
   getBlockedTiles,
-  layoutToDeskSlots,
+  layoutToSeats,
+  getSeatTiles,
   createDefaultLayout,
   serializeLayout,
   deserializeLayout,
 } from './layoutSerializer.js'
 export {
-  createTileMap,
-  createDeskSlots,
-  getDeskTiles,
-  createFurniture,
   isWalkable,
   getWalkableTiles,
   findPath,
