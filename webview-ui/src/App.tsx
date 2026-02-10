@@ -135,8 +135,10 @@ function App() {
           selectedTileType={editorState.selectedTileType}
           selectedFurnitureType={editorState.selectedFurnitureType}
           selectedFurnitureUid={editorState.selectedFurnitureUid}
+          floorColor={editorState.floorColor}
           onToolChange={editor.handleToolChange}
           onTileTypeChange={editor.handleTileTypeChange}
+          onFloorColorChange={editor.handleFloorColorChange}
           onFurnitureTypeChange={editor.handleFurnitureTypeChange}
           onDeleteSelected={editor.handleDeleteSelected}
           onUndo={editor.handleUndo}

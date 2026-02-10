@@ -2,7 +2,8 @@ import { useState, useCallback, useRef } from 'react'
 import type { OfficeState } from '../office/engine/officeState.js'
 import type { EditorState } from '../office/editor/editorState.js'
 import { EditTool } from '../office/types.js'
-import type { OfficeLayout, EditTool as EditToolType, TileType as TileTypeVal } from '../office/types.js'
+import { TileType } from '../office/types.js'
+import type { OfficeLayout, EditTool as EditToolType, TileType as TileTypeVal, FloorColor } from '../office/types.js'
 import { paintTile, placeFurniture, removeFurniture, canPlaceFurniture } from '../office/editor/editorActions.js'
 import { getCatalogEntry } from '../office/layout/furnitureCatalog.js'
 import { defaultZoom } from '../office/toolUtils.js'
@@ -19,6 +20,7 @@ export interface EditorActions {
   handleToggleEditMode: () => void
   handleToolChange: (tool: EditToolType) => void
   handleTileTypeChange: (type: TileTypeVal) => void
+  handleFloorColorChange: (color: FloorColor) => void
   handleFurnitureTypeChange: (type: string) => void // FurnitureType enum or asset ID
   handleDeleteSelected: () => void
   handleUndo: () => void
@@ -89,6 +91,11 @@ export function useEditorActions(
     setEditorTick((n) => n + 1)
   }, [editorState])
 
+  const handleFloorColorChange = useCallback((color: FloorColor) => {
+    editorState.floorColor = color
+    setEditorTick((n) => n + 1)
+  }, [editorState])
+
   const handleFurnitureTypeChange = useCallback((type: string) => {
     editorState.selectedFurnitureType = type
     setEditorTick((n) => n + 1)
@@ -142,7 +149,7 @@ export function useEditorActions(
     const layout = os.getLayout()
 
     if (editorState.activeTool === EditTool.TILE_PAINT) {
-      const newLayout = paintTile(layout, col, row, editorState.selectedTileType)
+      const newLayout = paintTile(layout, col, row, editorState.selectedTileType, editorState.floorColor)
       if (newLayout !== layout) {
         applyEdit(newLayout)
       }
@@ -167,6 +174,21 @@ export function useEditorActions(
           applyEdit(newLayout)
         }
       }
+    } else if (editorState.activeTool === EditTool.EYEDROPPER) {
+      const idx = row * layout.cols + col
+      const tile = layout.tiles[idx]
+      if (tile !== undefined && tile !== TileType.WALL) {
+        editorState.selectedTileType = tile
+        const color = layout.tileColors?.[idx]
+        if (color) {
+          editorState.floorColor = { ...color }
+        }
+        editorState.activeTool = EditTool.TILE_PAINT
+      } else if (tile === TileType.WALL) {
+        editorState.selectedTileType = TileType.WALL
+        editorState.activeTool = EditTool.TILE_PAINT
+      }
+      setEditorTick((n) => n + 1)
     } else if (editorState.activeTool === EditTool.SELECT) {
       const hit = layout.furniture.find((f) => {
         const entry = getCatalogEntry(f.type)
@@ -189,6 +211,7 @@ export function useEditorActions(
     handleToggleEditMode,
     handleToolChange,
     handleTileTypeChange,
+    handleFloorColorChange,
     handleFurnitureTypeChange,
     handleDeleteSelected,
     handleUndo,

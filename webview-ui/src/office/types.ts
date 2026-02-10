@@ -4,12 +4,27 @@ export const MAP_ROWS = 11
 
 export const TileType = {
   WALL: 0,
-  TILE_FLOOR: 1,
-  WOOD_FLOOR: 2,
-  CARPET: 3,
-  DOORWAY: 4,
+  FLOOR_1: 1,
+  FLOOR_2: 2,
+  FLOOR_3: 3,
+  FLOOR_4: 4,
+  FLOOR_5: 5,
+  FLOOR_6: 6,
+  FLOOR_7: 7,
 } as const
 export type TileType = (typeof TileType)[keyof typeof TileType]
+
+/** Per-tile color settings for floor pattern colorization */
+export interface FloorColor {
+  /** Hue 0-360 */
+  h: number
+  /** Saturation 0-100 */
+  s: number
+  /** Brightness -100 to 100 */
+  b: number
+  /** Contrast -100 to 100 */
+  c: number
+}
 
 export const CharacterState = {
   IDLE: 'idle',
@@ -94,6 +109,7 @@ export const EditTool = {
   FURNITURE_PLACE: 'furniture_place',
   SELECT: 'select',
   ERASER: 'eraser',
+  EYEDROPPER: 'eyedropper',
 } as const
 export type EditTool = (typeof EditTool)[keyof typeof EditTool]
 
@@ -120,6 +136,8 @@ export interface OfficeLayout {
   rows: number
   tiles: TileType[]
   furniture: PlacedFurniture[]
+  /** Per-tile color settings, parallel to tiles array. null = wall/no color */
+  tileColors?: Array<FloorColor | null>
 }
 
 export interface Character {

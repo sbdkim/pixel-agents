@@ -1,5 +1,5 @@
 import { TileType, FurnitureType, MAP_COLS, MAP_ROWS, TILE_SIZE, Direction } from '../types.js'
-import type { TileType as TileTypeVal, OfficeLayout, PlacedFurniture, Seat, FurnitureInstance } from '../types.js'
+import type { TileType as TileTypeVal, OfficeLayout, PlacedFurniture, Seat, FurnitureInstance, FloorColor } from '../types.js'
 import { getCatalogEntry } from './furnitureCatalog.js'
 
 /** Convert flat tile array from layout into 2D grid */
@@ -116,22 +116,43 @@ export function getSeatTiles(seats: Map<string, Seat>): Set<string> {
   return tiles
 }
 
+/** Default floor colors for the two rooms */
+const DEFAULT_LEFT_ROOM_COLOR: FloorColor = { h: 35, s: 30, b: 15, c: 0 }  // warm beige
+const DEFAULT_RIGHT_ROOM_COLOR: FloorColor = { h: 25, s: 45, b: 5, c: 10 }  // warm brown
+const DEFAULT_CARPET_COLOR: FloorColor = { h: 280, s: 40, b: -5, c: 0 }     // purple
+const DEFAULT_DOORWAY_COLOR: FloorColor = { h: 35, s: 25, b: 10, c: 0 }     // tan
+
 /** Create the default office layout matching the current hardcoded office */
 export function createDefaultLayout(): OfficeLayout {
   const W = TileType.WALL
-  const T = TileType.TILE_FLOOR
-  const F = TileType.WOOD_FLOOR
-  const C = TileType.CARPET
-  const D = TileType.DOORWAY
+  const F1 = TileType.FLOOR_1
+  const F2 = TileType.FLOOR_2
+  const F3 = TileType.FLOOR_3
+  const F4 = TileType.FLOOR_4
 
   const tiles: TileTypeVal[] = []
+  const tileColors: Array<FloorColor | null> = []
+
   for (let r = 0; r < MAP_ROWS; r++) {
     for (let c = 0; c < MAP_COLS; c++) {
-      if (r === 0 || r === MAP_ROWS - 1) { tiles.push(W); continue }
-      if (c === 0 || c === MAP_COLS - 1) { tiles.push(W); continue }
-      if (c === 10) { tiles.push(r >= 4 && r <= 6 ? D : W); continue }
-      if (c >= 15 && c <= 18 && r >= 7 && r <= 9) { tiles.push(C); continue }
-      tiles.push(c < 10 ? T : F)
+      if (r === 0 || r === MAP_ROWS - 1) { tiles.push(W); tileColors.push(null); continue }
+      if (c === 0 || c === MAP_COLS - 1) { tiles.push(W); tileColors.push(null); continue }
+      if (c === 10) {
+        if (r >= 4 && r <= 6) {
+          tiles.push(F4); tileColors.push(DEFAULT_DOORWAY_COLOR)
+        } else {
+          tiles.push(W); tileColors.push(null)
+        }
+        continue
+      }
+      if (c >= 15 && c <= 18 && r >= 7 && r <= 9) {
+        tiles.push(F3); tileColors.push(DEFAULT_CARPET_COLOR); continue
+      }
+      if (c < 10) {
+        tiles.push(F1); tileColors.push(DEFAULT_LEFT_ROOM_COLOR)
+      } else {
+        tiles.push(F2); tileColors.push(DEFAULT_RIGHT_ROOM_COLOR)
+      }
     }
   }
 
@@ -155,7 +176,7 @@ export function createDefaultLayout(): OfficeLayout {
     { uid: 'chair-r-right', type: FurnitureType.CHAIR, col: 15, row: 3 },
   ]
 
-  return { version: 1, cols: MAP_COLS, rows: MAP_ROWS, tiles, furniture }
+  return { version: 1, cols: MAP_COLS, rows: MAP_ROWS, tiles, tileColors, furniture }
 }
 
 /** Serialize layout to JSON string */
@@ -163,13 +184,59 @@ export function serializeLayout(layout: OfficeLayout): string {
   return JSON.stringify(layout)
 }
 
-/** Deserialize layout from JSON string */
+/** Deserialize layout from JSON string, migrating old tile types if needed */
 export function deserializeLayout(json: string): OfficeLayout | null {
   try {
     const obj = JSON.parse(json)
     if (obj && obj.version === 1 && Array.isArray(obj.tiles) && Array.isArray(obj.furniture)) {
-      return obj as OfficeLayout
+      return migrateLayout(obj as OfficeLayout)
     }
   } catch { /* ignore parse errors */ }
   return null
+}
+
+/**
+ * Ensure layout has tileColors. If missing, generate defaults based on tile types.
+ * Exported for use by message handlers that receive layouts over the wire.
+ */
+export function migrateLayoutColors(layout: OfficeLayout): OfficeLayout {
+  return migrateLayout(layout)
+}
+
+/**
+ * Migrate old layouts that use legacy tile types (TILE_FLOOR=1, WOOD_FLOOR=2, CARPET=3, DOORWAY=4)
+ * to the new pattern-based system. If tileColors is already present, no migration needed.
+ */
+function migrateLayout(layout: OfficeLayout): OfficeLayout {
+  if (layout.tileColors && layout.tileColors.length === layout.tiles.length) {
+    return layout // Already migrated
+  }
+
+  // Check if any tiles use old values (1-4) — these map directly to FLOOR_1-4
+  // but need color assignments
+  const tileColors: Array<FloorColor | null> = []
+  for (const tile of layout.tiles) {
+    switch (tile) {
+      case 0: // WALL
+        tileColors.push(null)
+        break
+      case 1: // was TILE_FLOOR → FLOOR_1 beige
+        tileColors.push(DEFAULT_LEFT_ROOM_COLOR)
+        break
+      case 2: // was WOOD_FLOOR → FLOOR_2 brown
+        tileColors.push(DEFAULT_RIGHT_ROOM_COLOR)
+        break
+      case 3: // was CARPET → FLOOR_3 purple
+        tileColors.push(DEFAULT_CARPET_COLOR)
+        break
+      case 4: // was DOORWAY → FLOOR_4 tan
+        tileColors.push(DEFAULT_DOORWAY_COLOR)
+        break
+      default:
+        // New tile types (5-7) without colors — use neutral gray
+        tileColors.push(tile > 0 ? { h: 0, s: 0, b: 0, c: 0 } : null)
+    }
+  }
+
+  return { ...layout, tileColors }
 }

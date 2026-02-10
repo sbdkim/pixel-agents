@@ -134,6 +134,24 @@ Users can import custom pixel art tilesets via the interactive CLI at `scripts/0
 - **Catalog structure**: Metadata stored separately in JSON (paths, dimensions, flags) while pixel data loaded into memory as 2D sprite arrays for fast rendering.
 - **Dynamic catalog replacement**: When custom assets present, hardcoded furniture is completely excluded via `buildDynamicCatalog()` check.
 
+### Floor tile system
+
+Floor tiles are loaded from `floors.png` (7 grayscale 16×16 patterns in a horizontal strip, 112×16 total). Each floor tile can be colorized independently using Photoshop-style Colorize (Hue, Saturation, Brightness, Contrast).
+
+**Data model**: `TileType` values: WALL=0, FLOOR_1..FLOOR_7 (1-7). `OfficeLayout` has optional `tileColors: Array<FloorColor | null>` parallel to `tiles` array. `FloorColor = { h, s, b, c }`. Wall tiles have `null` color.
+
+**Loading pipeline**: Extension reads `floors.png` with pngjs → splits into 7 SpriteData arrays → sends `floorTilesLoaded` message to webview → stored in module-level `floorSprites` array in `floorTiles.ts`.
+
+**Colorize algorithm** (`floorTiles.ts`): Grayscale pixel → perceived luminance → apply contrast (expand/compress around 0.5) → apply brightness (shift) → create HSL color with user hue+saturation → convert to hex. Results cached by `(pattern, h, s, b, c)` key.
+
+**Rendering**: `renderer.ts` renders non-wall tiles as colorized sprites via `getColorizedFloorSprite()` + `getCachedSprite()` for zoom caching. Wall tiles remain solid color (`#3A3A5C`).
+
+**Editor**: "Floor" tool shows 7 patterns as 3×3 tiled previews (48×48) with current color applied. "Color" button toggles HSBC slider panel. Color is baked per-tile on paint. "Wall" button paints wall tiles. "Pick" eyedropper button samples pattern + color from an existing tile and switches to paint mode.
+
+**Migration**: Old layouts without `tileColors` get auto-migrated: old TILE_FLOOR→beige, WOOD_FLOOR→brown, CARPET→purple, DOORWAY→tan. Pattern indices 1-4 map to same positions as old tile types.
+
+**Persistence**: Layout (including `tileColors`) saved to `workspaceState` key `'arcadia.layout'`. On reload, extension sends `floorTilesLoaded` → `furnitureAssetsLoaded` → `layoutLoaded` in order. Dynamic furniture catalog is built synchronously in the `furnitureAssetsLoaded` handler (not deferred to React useEffect) so `getCatalogEntry()` resolves when `layoutLoaded` triggers `rebuildFromLayout()`.
+
 ## Key decisions
 
 - Used `WebviewViewProvider` (not `WebviewPanel`) so the view sits in the panel area alongside the terminal rather than in an editor tab.
@@ -215,8 +233,9 @@ All files live under `webview-ui/src/office/`, organized into subdirectories by 
 
 ```
 office/
-  types.ts              — Constants (TILE_SIZE=16, MAP 20x11), interfaces, FurnitureType, EditTool, OfficeLayout, ToolActivity
+  types.ts              — Constants (TILE_SIZE=16, MAP 20x11), interfaces, FurnitureType, EditTool, OfficeLayout, FloorColor, ToolActivity
   toolUtils.ts          — STATUS_TO_TOOL mapping, extractToolName(), defaultZoom()
+  floorTiles.ts         — Floor tile sprite storage, colorize algorithm, per-pattern+color cache
 
   sprites/              — Pixel art data + caching (pure data, no game logic)
     spriteData.ts       — Hardcoded pixel data for characters (6 palettes), furniture, tiles
@@ -326,9 +345,10 @@ Tool name is extracted from the status prefix (e.g., "Reading src/App.tsx" → R
 ### Office layout
 
 Two rooms connected by a doorway (col 10, rows 4-6):
-- **Left room** (tile floor, checkerboard pattern): 1 square desk (2x2 tiles) at (4,3)-(5,4), bookshelf on wall, plant in corner
-- **Right room** (wood floor): 1 square desk (2x2 tiles) at (13,3)-(14,4), water cooler, plant, whiteboard on wall
-- **Break area** (purple carpet): bottom-right corner of right room
+- **Left room** (floor pattern 1, warm beige): 1 square desk (2x2 tiles) at (4,3)-(5,4), bookshelf on wall, plant in corner
+- **Right room** (floor pattern 2, warm brown): 1 square desk (2x2 tiles) at (13,3)-(14,4), water cooler, plant, whiteboard on wall
+- **Break area** (floor pattern 3, purple): bottom-right corner of right room
+- **Doorway** (floor pattern 4, tan): col 10, rows 4-6
 - Walls around perimeter + center divider
 
 ### Seat system
@@ -346,8 +366,8 @@ The default layout has 2 desks (2x2 tiles each) with 4 chairs around each = 8 se
 Toggle-based edit mode for customizing the office layout:
 
 - **"Edit" button** (top-left, next to + Agent and Sessions) toggles edit mode on/off
-- **Tools**: Select, Paint, Place, Erase, Undo, Save, Reset
-- **Paint tool**: Click/drag to paint floor tiles (Wall, Tile Floor, Wood Floor, Carpet, Doorway)
+- **Tools**: Select, Floor, Place, Erase, Undo, Save, Reset
+- **Floor tool**: Click/drag to paint floor tiles. 7 patterns loaded from `floors.png` (grayscale), colorizable via HSBC sliders. Each pattern shown as 3×3 preview. Wall button for painting walls. "Color" button toggles Hue/Saturation/Brightness/Contrast sliders (Photoshop Colorize style). Per-tile color is baked on paint — changing sliders doesn't affect already-painted tiles.
 - **Place tool**: Click to place furniture from catalog (Desk, Bookshelf, Plant, Cooler, Whiteboard, Chair, PC, Lamp). Ghost preview shows placement validity (green/red tint).
 - **Select tool**: Click furniture to select it (dashed blue border). Press Delete to remove.
 - **Eraser tool**: Click to remove furniture at cursor position
@@ -355,7 +375,7 @@ Toggle-based edit mode for customizing the office layout:
 - **Save**: Flushes pending debounced save immediately and snapshots the layout as a checkpoint for Reset
 - **Reset**: Reverts to the last explicitly saved layout (with "Are you sure?" confirmation). The checkpoint is initialized from the persisted layout on load and updated each time Save is clicked.
 
-**Layout data model**: `OfficeLayout` = `{ version: 1, cols, rows, tiles: TileType[], furniture: PlacedFurniture[] }`. Flat tile array (row-major). Each `PlacedFurniture` has `uid`, `type`, `col`, `row`.
+**Layout data model**: `OfficeLayout` = `{ version: 1, cols, rows, tiles: TileType[], furniture: PlacedFurniture[], tileColors?: Array<FloorColor | null> }`. Flat tile array (row-major). Each `PlacedFurniture` has `uid`, `type`, `col`, `row`. `tileColors` is parallel to `tiles`, storing per-tile HSBC color settings (null for walls).
 
 **Persistence**: Layout saved to `workspaceState` key `'arcadia.layout'` via debounced (500ms) `saveLayout` message. On `webviewReady`, extension sends `layoutLoaded { layout }` to webview. `OfficeState.rebuildFromLayout()` rebuilds all derived state (tileMap, furniture instances, seats, blocked tiles, walkable tiles) and reassigns characters to available seats.
 

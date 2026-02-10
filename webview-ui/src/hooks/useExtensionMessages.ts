@@ -2,7 +2,9 @@ import { useState, useEffect } from 'react'
 import type { OfficeState } from '../office/engine/officeState.js'
 import type { OfficeLayout, ToolActivity } from '../office/types.js'
 import { extractToolName } from '../office/toolUtils.js'
-import { createDefaultLayout } from '../office/layout/layoutSerializer.js'
+import { migrateLayoutColors } from '../office/layout/layoutSerializer.js'
+import { buildDynamicCatalog } from '../office/layout/furnitureCatalog.js'
+import { setFloorSprites } from '../office/floorTiles.js'
 import { vscode } from '../vscodeApi.js'
 
 export interface SubagentCharacter {
@@ -71,8 +73,9 @@ export function useExtensionMessages(
       const os = getOfficeState()
 
       if (msg.type === 'layoutLoaded') {
-        const layout = msg.layout as OfficeLayout | null
-        if (layout && layout.version === 1) {
+        const rawLayout = msg.layout as OfficeLayout | null
+        const layout = rawLayout && rawLayout.version === 1 ? migrateLayoutColors(rawLayout) : null
+        if (layout) {
           os.rebuildFromLayout(layout)
           onLayoutLoaded?.(layout)
         } else {
@@ -283,23 +286,18 @@ export function useExtensionMessages(
         // Remove sub-agent character
         os.removeSubagent(id, parentToolId)
         setSubagentCharacters((prev) => prev.filter((s) => !(s.parentAgentId === id && s.parentToolId === parentToolId)))
+      } else if (msg.type === 'floorTilesLoaded') {
+        const sprites = msg.sprites as string[][][]
+        console.log(`[Webview] Received ${sprites.length} floor tile patterns`)
+        setFloorSprites(sprites)
       } else if (msg.type === 'furnitureAssetsLoaded') {
         try {
           const catalog = msg.catalog as FurnitureAsset[]
           const sprites = msg.sprites as Record<string, string[][]>
           console.log(`📦 Webview: Loaded ${catalog.length} furniture assets`)
+          // Build dynamic catalog immediately so getCatalogEntry() works when layoutLoaded arrives next
+          buildDynamicCatalog({ catalog, sprites })
           setLoadedAssets({ catalog, sprites })
-          console.log(`📦 Webview: Assets set in state, building dynamic catalog...`)
-
-          // Start fresh: keep room structure, clear all furniture
-          const defaultLayout = createDefaultLayout()
-          const emptyLayout: OfficeLayout = {
-            ...defaultLayout,
-            furniture: [], // Remove all default furniture
-          }
-          console.log(`📦 Webview: Created empty layout, rebuilding office state...`)
-          os.rebuildFromLayout(emptyLayout)
-          console.log(`📦 Webview: Office state rebuilt with empty furniture`)
         } catch (err) {
           console.error(`❌ Webview: Error processing furnitureAssetsLoaded:`, err)
         }

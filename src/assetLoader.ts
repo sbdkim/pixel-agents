@@ -144,6 +144,74 @@ function pngToSpriteData(pngBuffer: Buffer, width: number, height: number): stri
   }
 }
 
+export interface LoadedFloorTiles {
+  sprites: string[][][] // 7 sprites, each 16x16 SpriteData
+}
+
+/**
+ * Load floor tile patterns from floors.png (7 tiles, 16px each, horizontal strip)
+ */
+export async function loadFloorTiles(
+  assetsRoot: string,
+): Promise<LoadedFloorTiles | null> {
+  try {
+    const floorPath = path.join(assetsRoot, 'assets', 'floors.png')
+    if (!fs.existsSync(floorPath)) {
+      console.log('[AssetLoader] No floors.png found at:', floorPath)
+      return null
+    }
+
+    console.log('[AssetLoader] Loading floor tiles from:', floorPath)
+    const pngBuffer = fs.readFileSync(floorPath)
+    const png = PNG.sync.read(pngBuffer)
+    const tileCount = 7
+    const tileSize = 16
+
+    const sprites: string[][][] = []
+    for (let t = 0; t < tileCount; t++) {
+      const sprite: string[][] = []
+      for (let y = 0; y < tileSize; y++) {
+        const row: string[] = []
+        for (let x = 0; x < tileSize; x++) {
+          const px = t * tileSize + x
+          const idx = (y * png.width + px) * 4
+          const r = png.data[idx]
+          const g = png.data[idx + 1]
+          const b = png.data[idx + 2]
+          const a = png.data[idx + 3]
+          if (a < 128) {
+            row.push('')
+          } else {
+            row.push(`#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`.toUpperCase())
+          }
+        }
+        sprite.push(row)
+      }
+      sprites.push(sprite)
+    }
+
+    console.log(`[AssetLoader] ✅ Loaded ${sprites.length} floor tile patterns`)
+    return { sprites }
+  } catch (err) {
+    console.error(`[AssetLoader] ❌ Error loading floor tiles: ${err instanceof Error ? err.message : err}`)
+    return null
+  }
+}
+
+/**
+ * Send floor tiles to webview
+ */
+export function sendFloorTilesToWebview(
+  webview: vscode.Webview,
+  floorTiles: LoadedFloorTiles,
+): void {
+  webview.postMessage({
+    type: 'floorTilesLoaded',
+    sprites: floorTiles.sprites,
+  })
+  console.log(`📤 Sent ${floorTiles.sprites.length} floor tile patterns to webview`)
+}
+
 /**
  * Send loaded assets to webview
  */

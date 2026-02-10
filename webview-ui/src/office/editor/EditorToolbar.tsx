@@ -1,17 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { EditTool, TileType } from '../types.js'
-import type { TileType as TileTypeVal } from '../types.js'
+import type { TileType as TileTypeVal, FloorColor } from '../types.js'
 import { getCatalogByCategory, buildDynamicCatalog, getActiveCategories } from '../layout/furnitureCatalog.js'
 import type { FurnitureCategory, LoadedAssetData } from '../layout/furnitureCatalog.js'
 import { getCachedSprite } from '../sprites/spriteCache.js'
-
-const TILE_OPTIONS: Array<{ type: TileTypeVal; label: string; color: string }> = [
-  { type: TileType.WALL, label: 'Wall', color: '#3A3A5C' },
-  { type: TileType.TILE_FLOOR, label: 'Tile', color: '#D4C9A8' },
-  { type: TileType.WOOD_FLOOR, label: 'Wood', color: '#B08850' },
-  { type: TileType.CARPET, label: 'Carpet', color: '#7B4F8A' },
-  { type: TileType.DOORWAY, label: 'Door', color: '#9E8E70' },
-]
+import { getColorizedFloorSprite, getFloorPatternCount, hasFloorSprites } from '../floorTiles.js'
 
 const btnStyle: React.CSSProperties = {
   padding: '3px 8px',
@@ -52,8 +45,10 @@ interface EditorToolbarProps {
   selectedTileType: TileTypeVal
   selectedFurnitureType: string
   selectedFurnitureUid: string | null
+  floorColor: FloorColor
   onToolChange: (tool: EditTool) => void
   onTileTypeChange: (type: TileTypeVal) => void
+  onFloorColorChange: (color: FloorColor) => void
   onFurnitureTypeChange: (type: string) => void
   onDeleteSelected: () => void
   onUndo: () => void
@@ -62,13 +57,101 @@ interface EditorToolbarProps {
   loadedAssets?: LoadedAssetData
 }
 
+/** Render a 3×3 tiled preview of a floor pattern at the given color */
+function FloorPatternPreview({ patternIndex, color, selected, onClick }: {
+  patternIndex: number
+  color: FloorColor
+  selected: boolean
+  onClick: () => void
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const size = 48 // 3×16 = 48, shown at 48px
+  const tileZoom = 1 // render each sprite pixel as 1 canvas pixel
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    canvas.width = size
+    canvas.height = size
+    ctx.imageSmoothingEnabled = false
+
+    if (!hasFloorSprites()) {
+      ctx.fillStyle = '#444'
+      ctx.fillRect(0, 0, size, size)
+      return
+    }
+
+    const sprite = getColorizedFloorSprite(patternIndex, color)
+    const cached = getCachedSprite(sprite, tileZoom)
+
+    // Draw 3×3 grid of the tile
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) {
+        ctx.drawImage(cached, c * 16, r * 16)
+      }
+    }
+  }, [patternIndex, color])
+
+  return (
+    <button
+      onClick={onClick}
+      title={`Floor ${patternIndex}`}
+      style={{
+        width: size,
+        height: size,
+        padding: 0,
+        border: selected ? '2px solid var(--vscode-focusBorder, #007fd4)' : '1px solid #555',
+        borderRadius: 3,
+        cursor: 'pointer',
+        overflow: 'hidden',
+        flexShrink: 0,
+        background: '#2A2A3A',
+      }}
+    >
+      <canvas
+        ref={canvasRef}
+        style={{ width: size, height: size, display: 'block' }}
+      />
+    </button>
+  )
+}
+
+/** Slider control for a single color parameter */
+function ColorSlider({ label, value, min, max, onChange }: {
+  label: string
+  value: number
+  min: number
+  max: number
+  onChange: (v: number) => void
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      <span style={{ fontSize: '10px', color: '#999', width: 14, textAlign: 'right', flexShrink: 0 }}>{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{ flex: 1, height: 12, accentColor: 'var(--vscode-focusBorder, #007fd4)' }}
+      />
+      <span style={{ fontSize: '10px', color: '#999', width: 28, textAlign: 'right', flexShrink: 0 }}>{value}</span>
+    </div>
+  )
+}
+
 export function EditorToolbar({
   activeTool,
   selectedTileType,
   selectedFurnitureType,
   selectedFurnitureUid,
+  floorColor,
   onToolChange,
   onTileTypeChange,
+  onFloorColorChange,
   onFurnitureTypeChange,
   onDeleteSelected,
   onUndo,
@@ -78,6 +161,7 @@ export function EditorToolbar({
 }: EditorToolbarProps) {
   const [activeCategory, setActiveCategory] = useState<FurnitureCategory>('desks')
   const [showResetConfirm, setShowResetConfirm] = useState(false)
+  const [showColor, setShowColor] = useState(false)
 
   // Build dynamic catalog from loaded assets
   useEffect(() => {
@@ -97,12 +181,20 @@ export function EditorToolbar({
           }
         }
       } catch (err) {
-        console.error(`[EditorToolbar] ❌ Error building dynamic catalog:`, err)
+        console.error(`[EditorToolbar] Error building dynamic catalog:`, err)
       }
     }
   }, [loadedAssets])
 
+  const handleColorChange = useCallback((key: keyof FloorColor, value: number) => {
+    onFloorColorChange({ ...floorColor, [key]: value })
+  }, [floorColor, onFloorColorChange])
+
   const categoryItems = getCatalogByCategory(activeCategory)
+
+  const patternCount = getFloorPatternCount()
+  // Wall is TileType 0, floor patterns are 1..patternCount
+  const floorPatterns = Array.from({ length: patternCount }, (_, i) => i + 1)
 
   return (
     <div
@@ -118,7 +210,7 @@ export function EditorToolbar({
         display: 'flex',
         flexDirection: 'column',
         gap: 6,
-        maxWidth: 320,
+        maxWidth: 380,
       }}
     >
       {/* Tool row */}
@@ -131,11 +223,11 @@ export function EditorToolbar({
           Select
         </button>
         <button
-          style={activeTool === EditTool.TILE_PAINT ? activeBtnStyle : btnStyle}
+          style={(activeTool === EditTool.TILE_PAINT || activeTool === EditTool.EYEDROPPER) ? activeBtnStyle : btnStyle}
           onClick={() => onToolChange(EditTool.TILE_PAINT)}
-          title="Paint floor/wall tiles"
+          title="Paint floor tiles"
         >
-          Paint
+          Floor
         </button>
         <button
           style={activeTool === EditTool.FURNITURE_PLACE ? activeBtnStyle : btnStyle}
@@ -189,25 +281,74 @@ export function EditorToolbar({
         </div>
       )}
 
-      {/* Sub-panel: Tile types */}
-      {activeTool === EditTool.TILE_PAINT && (
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {TILE_OPTIONS.map((t) => (
+      {/* Sub-panel: Floor tiles */}
+      {(activeTool === EditTool.TILE_PAINT || activeTool === EditTool.EYEDROPPER) && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {/* Wall button + Color toggle + Pick */}
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
             <button
-              key={t.type}
-              onClick={() => onTileTypeChange(t.type)}
-              title={t.label}
+              onClick={() => onTileTypeChange(TileType.WALL)}
+              title="Wall"
               style={{
-                width: 24,
+                width: 48,
                 height: 24,
-                background: t.color,
-                border: selectedTileType === t.type ? '2px solid var(--vscode-focusBorder, #007fd4)' : '1px solid #555',
+                background: '#3A3A5C',
+                border: selectedTileType === TileType.WALL ? '2px solid var(--vscode-focusBorder, #007fd4)' : '1px solid #555',
                 borderRadius: 3,
                 cursor: 'pointer',
                 padding: 0,
+                fontSize: '10px',
+                color: '#aaa',
               }}
-            />
-          ))}
+            >
+              Wall
+            </button>
+            <button
+              style={showColor ? activeBtnStyle : btnStyle}
+              onClick={() => setShowColor((v) => !v)}
+              title="Adjust floor color"
+            >
+              Color
+            </button>
+            <button
+              style={activeTool === EditTool.EYEDROPPER ? activeBtnStyle : btnStyle}
+              onClick={() => onToolChange(EditTool.EYEDROPPER)}
+              title="Pick floor pattern + color from existing tile"
+            >
+              Pick
+            </button>
+          </div>
+
+          {/* Color controls (collapsible) */}
+          {showColor && (
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 3,
+              padding: '4px 6px',
+              background: 'rgba(20,20,36,0.8)',
+              border: '1px solid #555',
+              borderRadius: 3,
+            }}>
+              <ColorSlider label="H" value={floorColor.h} min={0} max={360} onChange={(v) => handleColorChange('h', v)} />
+              <ColorSlider label="S" value={floorColor.s} min={0} max={100} onChange={(v) => handleColorChange('s', v)} />
+              <ColorSlider label="B" value={floorColor.b} min={-100} max={100} onChange={(v) => handleColorChange('b', v)} />
+              <ColorSlider label="C" value={floorColor.c} min={-100} max={100} onChange={(v) => handleColorChange('c', v)} />
+            </div>
+          )}
+
+          {/* Floor pattern grid */}
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {floorPatterns.map((patIdx) => (
+              <FloorPatternPreview
+                key={patIdx}
+                patternIndex={patIdx}
+                color={floorColor}
+                selected={selectedTileType === patIdx}
+                onClick={() => onTileTypeChange(patIdx as TileTypeVal)}
+              />
+            ))}
+          </div>
         </div>
       )}
 

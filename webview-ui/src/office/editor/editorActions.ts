@@ -1,15 +1,29 @@
-import { MAP_COLS, MAP_ROWS } from '../types.js'
-import type { TileType as TileTypeVal, OfficeLayout, PlacedFurniture } from '../types.js'
+import { MAP_COLS, MAP_ROWS, TileType } from '../types.js'
+import type { TileType as TileTypeVal, OfficeLayout, PlacedFurniture, FloorColor } from '../types.js'
 import { getCatalogEntry } from '../layout/furnitureCatalog.js'
 
-/** Paint a single tile. Returns new layout (immutable). */
-export function paintTile(layout: OfficeLayout, col: number, row: number, tileType: TileTypeVal): OfficeLayout {
+/** Paint a single tile with pattern and color. Returns new layout (immutable). */
+export function paintTile(layout: OfficeLayout, col: number, row: number, tileType: TileTypeVal, color?: FloorColor): OfficeLayout {
   const idx = row * layout.cols + col
   if (idx < 0 || idx >= layout.tiles.length) return layout
-  if (layout.tiles[idx] === tileType) return layout
+
+  const existingColors = layout.tileColors || new Array(layout.tiles.length).fill(null)
+  const newColor = tileType === TileType.WALL ? null : (color ?? { h: 0, s: 0, b: 0, c: 0 })
+
+  // Check if anything actually changed
+  if (layout.tiles[idx] === tileType) {
+    const existingColor = existingColors[idx]
+    if (newColor === null && existingColor === null) return layout
+    if (newColor && existingColor &&
+      newColor.h === existingColor.h && newColor.s === existingColor.s &&
+      newColor.b === existingColor.b && newColor.c === existingColor.c) return layout
+  }
+
   const tiles = [...layout.tiles]
   tiles[idx] = tileType
-  return { ...layout, tiles }
+  const tileColors = [...existingColors]
+  tileColors[idx] = newColor
+  return { ...layout, tiles, tileColors }
 }
 
 /** Place furniture. Returns new layout (immutable). */

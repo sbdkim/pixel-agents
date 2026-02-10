@@ -1,35 +1,9 @@
 import { TileType, TILE_SIZE, MAP_COLS, MAP_ROWS } from '../types.js'
-import type { TileType as TileTypeVal, FurnitureInstance, Character, SpriteData, Seat } from '../types.js'
+import type { TileType as TileTypeVal, FurnitureInstance, Character, SpriteData, Seat, FloorColor } from '../types.js'
 import { getCachedSprite, getOutlineSprite } from '../sprites/spriteCache.js'
 import { getCharacterSprites, BUBBLE_PERMISSION_SPRITE, BUBBLE_WAITING_SPRITE } from '../sprites/spriteData.js'
 import { getCharacterSprite } from './characters.js'
-
-// ── Tile colors ─────────────────────────────────────────────────
-
-const WALL_COLOR = '#3A3A5C'
-const TILE_FLOOR_A = '#D4C9A8'
-const TILE_FLOOR_B = '#CCC19E'
-const WOOD_FLOOR_A = '#B08850'
-const WOOD_FLOOR_B = '#A47D48'
-const CARPET_COLOR = '#7B4F8A'
-const DOORWAY_COLOR = '#9E8E70'
-
-function getTileColor(tile: TileTypeVal, col: number, row: number): string {
-  switch (tile) {
-    case TileType.WALL:
-      return WALL_COLOR
-    case TileType.TILE_FLOOR:
-      return (col + row) % 2 === 0 ? TILE_FLOOR_A : TILE_FLOOR_B
-    case TileType.WOOD_FLOOR:
-      return (col + row) % 2 === 0 ? WOOD_FLOOR_A : WOOD_FLOOR_B
-    case TileType.CARPET:
-      return CARPET_COLOR
-    case TileType.DOORWAY:
-      return DOORWAY_COLOR
-    default:
-      return '#000000'
-  }
-}
+import { getColorizedFloorSprite, hasFloorSprites, WALL_COLOR } from '../floorTiles.js'
 
 // ── Render functions ────────────────────────────────────────────
 
@@ -39,12 +13,29 @@ export function renderTileGrid(
   offsetX: number,
   offsetY: number,
   zoom: number,
+  tileColors?: Array<FloorColor | null>,
+  cols?: number,
 ): void {
   const s = TILE_SIZE * zoom
+  const useSpriteFloors = hasFloorSprites()
+
   for (let r = 0; r < MAP_ROWS; r++) {
     for (let c = 0; c < MAP_COLS; c++) {
-      ctx.fillStyle = getTileColor(tileMap[r][c], c, r)
-      ctx.fillRect(offsetX + c * s, offsetY + r * s, s, s)
+      const tile = tileMap[r][c]
+
+      if (tile === TileType.WALL || !useSpriteFloors) {
+        // Wall tiles or fallback: solid color
+        ctx.fillStyle = tile === TileType.WALL ? WALL_COLOR : '#808080'
+        ctx.fillRect(offsetX + c * s, offsetY + r * s, s, s)
+        continue
+      }
+
+      // Floor tile: get colorized sprite
+      const colorIdx = cols ? r * cols + c : r * MAP_COLS + c
+      const color = tileColors?.[colorIdx] ?? { h: 0, s: 0, b: 0, c: 0 }
+      const sprite = getColorizedFloorSprite(tile, color)
+      const cached = getCachedSprite(sprite, zoom)
+      ctx.drawImage(cached, offsetX + c * s, offsetY + r * s)
     }
   }
 }
@@ -305,6 +296,8 @@ export function renderFrame(
   panY: number,
   selection?: SelectionRenderState,
   editor?: EditorRenderState,
+  tileColors?: Array<FloorColor | null>,
+  layoutCols?: number,
 ): { offsetX: number; offsetY: number } {
   // Clear
   ctx.clearRect(0, 0, canvasWidth, canvasHeight)
@@ -316,7 +309,7 @@ export function renderFrame(
   const offsetY = Math.floor((canvasHeight - mapH) / 2) + Math.round(panY)
 
   // Draw tiles
-  renderTileGrid(ctx, tileMap, offsetX, offsetY, zoom)
+  renderTileGrid(ctx, tileMap, offsetX, offsetY, zoom, tileColors, layoutCols)
 
   // Seat indicators (below furniture/characters, on top of floor)
   if (selection) {

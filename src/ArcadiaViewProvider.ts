@@ -12,7 +12,7 @@ import {
 	getProjectDirPath,
 } from './agentManager.js';
 import { ensureProjectScan } from './fileWatcher.js';
-import { loadFurnitureAssets, sendAssetsToWebview } from './assetLoader.js';
+import { loadFurnitureAssets, sendAssetsToWebview, loadFloorTiles, sendFloorTilesToWebview } from './assetLoader.js';
 
 export class ArcadiaViewProvider implements vscode.WebviewViewProvider {
 	nextAgentId = { current: 1 };
@@ -106,9 +106,9 @@ export class ArcadiaViewProvider implements vscode.WebviewViewProvider {
 							console.log('[Extension] extensionPath:', extensionPath);
 
 							// Check bundled location first: extensionPath/dist/assets/
+							const bundledAssetsDir = path.join(extensionPath, 'dist', 'assets');
 							let assetsRoot: string | null = null;
-							const bundledCatalogPath = path.join(extensionPath, 'dist', 'assets', 'furniture', 'furniture-catalog.json');
-							if (fs.existsSync(bundledCatalogPath)) {
+							if (fs.existsSync(bundledAssetsDir)) {
 								console.log('[Extension] Found bundled assets at dist/');
 								assetsRoot = path.join(extensionPath, 'dist');
 							} else if (workspaceRoot) {
@@ -119,36 +119,52 @@ export class ArcadiaViewProvider implements vscode.WebviewViewProvider {
 
 							if (!assetsRoot) {
 								console.log('[Extension] ⚠️  No assets directory found');
+								if (this.webview) {
+									sendLayout(this.context, this.webview);
+								}
 								return;
 							}
 
 							console.log('[Extension] Using assetsRoot:', assetsRoot);
+
+							// Load floor tiles
+							const floorTiles = await loadFloorTiles(assetsRoot);
+							if (floorTiles && this.webview) {
+								console.log('[Extension] Floor tiles loaded, sending to webview');
+								sendFloorTilesToWebview(this.webview, floorTiles);
+							}
+
 							const assets = await loadFurnitureAssets(assetsRoot);
 							if (assets && this.webview) {
 								console.log('[Extension] ✅ Assets loaded, sending to webview');
 								sendAssetsToWebview(this.webview, assets);
-								// Send empty layout when assets load (webview will clear furniture)
-								console.log('[Extension] Sending empty layout for new assets');
-								this.webview.postMessage({
-									type: 'layoutLoaded',
-									layout: null, // null will trigger default layout creation in webview
-								});
-								return;
-							} else {
-								console.log('[Extension] ⚠️  No assets returned from loader');
 							}
 						} catch (err) {
 							console.error('[Extension] ❌ Error loading assets:', err);
 						}
-						// Only send saved layout if assets didn't load
+						// Always send saved layout (or null for default)
 						if (this.webview) {
 							console.log('[Extension] Sending saved layout');
 							sendLayout(this.context, this.webview);
 						}
 					})();
 				} else {
-					// No project dir - send saved layout immediately
-					sendLayout(this.context, this.webview);
+					// No project dir — still try to load floor tiles, then send saved layout
+					(async () => {
+						try {
+							const ep = this.extensionUri.fsPath;
+							const bundled = path.join(ep, 'dist', 'assets');
+							if (fs.existsSync(bundled)) {
+								const ft = await loadFloorTiles(path.join(ep, 'dist'));
+								if (ft && this.webview) {
+									sendFloorTilesToWebview(this.webview, ft);
+								}
+							}
+						} catch { /* ignore */ }
+						if (this.webview) {
+							sendLayout(this.context, this.webview);
+						}
+					})();
 				}
 				sendExistingAgents(this.agents, this.context, this.webview);
 			} else if (message.type === 'openSessionsFolder') {

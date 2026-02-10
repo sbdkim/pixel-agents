@@ -1,11 +1,14 @@
 import { EditTool, TileType } from '../types.js'
-import type { TileType as TileTypeVal, OfficeLayout } from '../types.js'
+import type { TileType as TileTypeVal, OfficeLayout, FloorColor } from '../types.js'
 
 export class EditorState {
   isEditMode = false
   activeTool: EditTool = EditTool.SELECT
-  selectedTileType: TileTypeVal = TileType.TILE_FLOOR
+  selectedTileType: TileTypeVal = TileType.FLOOR_1
   selectedFurnitureType: string = 'desk' // FurnitureType.DESK or asset ID
+
+  // Floor color settings (applied to new tiles when painting)
+  floorColor: FloorColor = { h: 35, s: 30, b: 15, c: 0 }
 
   // Ghost preview position
   ghostCol = -1
