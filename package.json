@@ -27,6 +27,10 @@
       {
         "command": "pixel-agents.exportDefaultLayout",
         "title": "Pixel Agents: Export Layout as Default"
+      },
+      {
+        "command": "pixel-agents.setAgentProvider",
+        "title": "Pixel Agents: Set Agent Provider"
       }
     ],
     "viewsContainers": {
@@ -46,6 +50,20 @@
           "name": "Pixel Agents"
         }
       ]
+    },
+    "configuration": {
+      "title": "Pixel Agents",
+      "properties": {
+        "pixel-agents.agentProvider": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex"
+          ],
+          "default": "claude",
+          "description": "Select which CLI backend Pixel Agents uses when launching new agents."
+        }
+      }
     }
   },
   "scripts": {
@@ -59,7 +77,8 @@
     "package": "npm run check-types && npm run lint && node esbuild.js --production && npm run build:webview",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
-    "import-tileset": "tsx scripts/import-tileset-cli.ts"
+    "import-tileset": "tsx scripts/import-tileset-cli.ts",
+    "check:provider-routing": "tsx scripts/validate-provider-routing.ts"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.74.0",

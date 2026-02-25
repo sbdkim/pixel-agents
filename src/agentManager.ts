@@ -1,18 +1,53 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import * as vscode from 'vscode';
 import type { AgentState, PersistedAgent } from './types.js';
 import { cancelWaitingTimer, cancelPermissionTimer } from './timerManager.js';
 import { startFileWatching, readNewLines, ensureProjectScan } from './fileWatcher.js';
-import { JSONL_POLL_INTERVAL_MS, TERMINAL_NAME_PREFIX, WORKSPACE_KEY_AGENTS, WORKSPACE_KEY_AGENT_SEATS } from './constants.js';
+import { JSONL_POLL_INTERVAL_MS, WORKSPACE_KEY_AGENTS, WORKSPACE_KEY_AGENT_SEATS } from './constants.js';
 import { migrateAndLoadLayout } from './layoutPersistence.js';
+import { type AgentProvider, getDefaultProvider, getProviderConfig, resolveAgentProvider } from './provider.js';
 
-export function getProjectDirPath(cwd?: string): string | null {
+export function getProjectDirPath(cwd?: string, provider: AgentProvider = getDefaultProvider()): string | null {
 	const workspacePath = cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 	if (!workspacePath) return null;
-	const dirName = workspacePath.replace(/[:\\/]/g, '-');
-	return path.join(os.homedir(), '.claude', 'projects', dirName);
+	const providerConfig = getProviderConfig(provider);
+	return providerConfig.projectDirFromWorkspace(workspacePath);
+}
+
+
+
+function findLikelySessionFile(
+	projectDir: string,
+	knownJsonlFiles: Set<string>,
+	launchedAtMs: number,
+): string | null {
+	let entries: Array<{ filePath: string; mtimeMs: number }>;
+	try {
+		entries = fs.readdirSync(projectDir)
+			.filter((f) => f.endsWith('.jsonl'))
+			.map((f) => {
+				const filePath = path.join(projectDir, f);
+				const stat = fs.statSync(filePath);
+				return { filePath, mtimeMs: stat.mtimeMs };
+			});
+	} catch {
+		return null;
+	}
+
+	const unseen = entries.filter((e) => !knownJsonlFiles.has(e.filePath));
+	if (unseen.length > 0) {
+		unseen.sort((a, b) => b.mtimeMs - a.mtimeMs);
+		return unseen[0].filePath;
+	}
+
+	const recent = entries.filter((e) => e.mtimeMs >= launchedAtMs - 2000);
+	if (recent.length > 0) {
+		recent.sort((a, b) => b.mtimeMs - a.mtimeMs);
+		return recent[0].filePath;
+	}
+
+	return null;
 }
 
 export function launchNewTerminal(
@@ -29,27 +64,31 @@ export function launchNewTerminal(
 	projectScanTimerRef: { current: ReturnType<typeof setInterval> | null },
 	webview: vscode.Webview | undefined,
 	persistAgents: () => void,
+	provider: AgentProvider = getDefaultProvider(),
 ): void {
 	const idx = nextTerminalIndexRef.current++;
 	const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+	const providerConfig = getProviderConfig(provider);
 	const terminal = vscode.window.createTerminal({
-		name: `${TERMINAL_NAME_PREFIX} #${idx}`,
+		name: `${providerConfig.terminalNamePrefix} #${idx}`,
 		cwd,
 	});
 	terminal.show();
 
 	const sessionId = crypto.randomUUID();
-	terminal.sendText(`claude --session-id ${sessionId}`);
+	terminal.sendText(providerConfig.buildLaunchCommand(sessionId));
 
-	const projectDir = getProjectDirPath(cwd);
+	const projectDir = getProjectDirPath(cwd, provider);
 	if (!projectDir) {
 		console.log(`[Pixel Agents] No project dir, cannot track agent`);
 		return;
 	}
 
-	// Pre-register expected JSONL file so project scan won't treat it as a /clear file
-	const expectedFile = path.join(projectDir, `${sessionId}.jsonl`);
-	knownJsonlFiles.add(expectedFile);
+	const expectedFile = providerConfig.expectedSessionFilePath(projectDir, sessionId);
+	if (expectedFile) {
+		// Pre-register expected JSONL file so project scan won't treat it as a /clear file
+		knownJsonlFiles.add(expectedFile);
+	}
 
 	// Create agent immediately (before JSONL file exists)
 	const id = nextAgentIdRef.current++;
@@ -57,7 +96,7 @@ export function launchNewTerminal(
 		id,
 		terminalRef: terminal,
 		projectDir,
-		jsonlFile: expectedFile,
+		jsonlFile: expectedFile ?? '',
 		fileOffset: 0,
 		lineBuffer: '',
 		activeToolIds: new Set(),
@@ -68,6 +107,7 @@ export function launchNewTerminal(
 		isWaiting: false,
 		permissionSent: false,
 		hadToolsInTurn: false,
+		provider: providerConfig.id,
 	};
 
 	agents.set(id, agent);
@@ -82,15 +122,26 @@ export function launchNewTerminal(
 		webview, persistAgents,
 	);
 
-	// Poll for the specific JSONL file to appear
+	const launchedAtMs = Date.now();
 	const pollTimer = setInterval(() => {
 		try {
-			if (fs.existsSync(agent.jsonlFile)) {
+			if (agent.jsonlFile && fs.existsSync(agent.jsonlFile)) {
 				console.log(`[Pixel Agents] Agent ${id}: found JSONL file ${path.basename(agent.jsonlFile)}`);
 				clearInterval(pollTimer);
 				jsonlPollTimers.delete(id);
 				startFileWatching(id, agent.jsonlFile, agents, fileWatchers, pollingTimers, waitingTimers, permissionTimers, webview);
 				readNewLines(id, agents, waitingTimers, permissionTimers, webview);
+				return;
+			}
+
+			if (!agent.jsonlFile) {
+				const candidate = findLikelySessionFile(projectDir, knownJsonlFiles, launchedAtMs);
+				if (candidate) {
+					agent.jsonlFile = candidate;
+					knownJsonlFiles.add(candidate);
+					persistAgents();
+					console.log(`[Pixel Agents] Agent ${id}: adopted session file ${path.basename(candidate)}`);
+				}
 			}
 		} catch { /* file may not exist yet */ }
 	}, JSONL_POLL_INTERVAL_MS);
@@ -142,6 +193,7 @@ export function persistAgents(
 			terminalName: agent.terminalRef.name,
 			jsonlFile: agent.jsonlFile,
 			projectDir: agent.projectDir,
+			provider: agent.provider,
 		});
 	}
 	context.workspaceState.update(WORKSPACE_KEY_AGENTS, persisted);
@@ -175,6 +227,8 @@ export function restoreAgents(
 		const terminal = liveTerminals.find(t => t.name === p.terminalName);
 		if (!terminal) continue;
 
+		const provider = resolveAgentProvider(p.provider);
+
 		const agent: AgentState = {
 			id: p.id,
 			terminalRef: terminal,
@@ -190,6 +244,7 @@ export function restoreAgents(
 			isWaiting: false,
 			permissionSent: false,
 			hadToolsInTurn: false,
+			provider,
 		};
 
 		agents.set(p.id, agent);
