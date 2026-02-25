@@ -5,6 +5,7 @@ import type { AgentState } from './types.js';
 import { cancelWaitingTimer, cancelPermissionTimer, clearAgentActivity } from './timerManager.js';
 import { processTranscriptLine } from './transcriptParser.js';
 import { FILE_WATCHER_POLL_INTERVAL_MS, PROJECT_SCAN_INTERVAL_MS } from './constants.js';
+import { getDefaultProvider } from './provider.js';
 
 export function startFileWatching(
 	agentId: number,
@@ -197,6 +198,7 @@ function adoptTerminalForFile(
 		isWaiting: false,
 		permissionSent: false,
 		hadToolsInTurn: false,
+		provider: getDefaultProvider(),
 	};
 
 	agents.set(id, agent);

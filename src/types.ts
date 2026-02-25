@@ -1,4 +1,5 @@
 import type * as vscode from 'vscode';
+import type { AgentProvider } from './provider.js';
 
 export interface AgentState {
 	id: number;
@@ -15,6 +16,7 @@ export interface AgentState {
 	isWaiting: boolean;
 	permissionSent: boolean;
 	hadToolsInTurn: boolean;
+	provider: AgentProvider;
 }
 
 export interface PersistedAgent {
@@ -22,4 +24,5 @@ export interface PersistedAgent {
 	terminalName: string;
 	jsonlFile: string;
 	projectDir: string;
+	provider?: AgentProvider;
 }
