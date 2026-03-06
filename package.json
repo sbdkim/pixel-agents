@@ -1,7 +1,7 @@
 {
   "name": "pixel-agents",
   "displayName": "Pixel Agents",
-  "description": "Pixel art office where your Claude Code agents come to life as animated characters",
+  "description": "Pixel art office where your Codex agents come to life as animated characters",
   "version": "1.0.2",
   "publisher": "pablodelucca",
   "repository": {
@@ -59,10 +59,9 @@
     "package": "npm run check-types && npm run lint && node esbuild.js --production && npm run build:webview",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
-    "import-tileset": "tsx scripts/import-tileset-cli.ts"
+    "import-tileset": "tsx scripts/0-import-tileset.ts"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "^0.74.0",
     "@types/node": "22.x",
     "@types/pngjs": "^6.0.5",
     "@types/vscode": "^1.107.0",
@@ -75,3 +74,4 @@
     "typescript-eslint": "^8.54.0"
   }
 }
+

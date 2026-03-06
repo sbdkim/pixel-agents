@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+﻿import { useState, useCallback, useRef } from 'react'
 import { OfficeState } from './office/engine/officeState.js'
 import { OfficeCanvas } from './office/components/OfficeCanvas.js'
 import { ToolOverlay } from './office/components/ToolOverlay.js'
@@ -15,7 +15,7 @@ import { ZoomControls } from './components/ZoomControls.js'
 import { BottomToolbar } from './components/BottomToolbar.js'
 import { DebugView } from './components/DebugView.js'
 
-// Game state lives outside React — updated imperatively by message handlers
+// Game state lives outside React ??updated imperatively by message handlers
 const officeStateRef = { current: null as OfficeState | null }
 const editorState = new EditorState()
 
@@ -151,11 +151,7 @@ function App() {
   }, [])
 
   const handleClick = useCallback((agentId: number) => {
-    // If clicked agent is a sub-agent, focus the parent's terminal instead
-    const os = getOfficeState()
-    const meta = os.subagentMeta.get(agentId)
-    const focusId = meta ? meta.parentAgentId : agentId
-    vscode.postMessage({ type: 'focusAgent', id: focusId })
+    vscode.postMessage({ type: 'focusAgent', id: agentId })
   }, [])
 
   const officeState = getOfficeState()
@@ -225,7 +221,7 @@ function App() {
 
       <BottomToolbar
         isEditMode={editor.isEditMode}
-        onOpenClaude={editor.handleOpenClaude}
+        onOpenCodex={editor.handleOpenCodex}
         onToggleEditMode={editor.handleToggleEditMode}
         isDebugMode={isDebugMode}
         onToggleDebugMode={handleToggleDebugMode}
@@ -311,3 +307,4 @@ function App() {
 }
 
 export default App
+

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+﻿import { useState, useCallback, useRef } from 'react'
 import type { OfficeState } from '../office/engine/officeState.js'
 import type { EditorState } from '../office/editor/editorState.js'
 import { EditTool } from '../office/types.js'
@@ -19,7 +19,7 @@ export interface EditorActions {
   panRef: React.MutableRefObject<{ x: number; y: number }>
   saveTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>
   setLastSavedLayout: (layout: OfficeLayout) => void
-  handleOpenClaude: () => void
+  handleOpenCodex: () => void
   handleToggleEditMode: () => void
   handleToolChange: (tool: EditToolType) => void
   handleTileTypeChange: (type: TileTypeVal) => void
@@ -78,8 +78,8 @@ export function useEditorActions(
     setEditorTick((n) => n + 1)
   }, [getOfficeState, editorState, saveLayout])
 
-  const handleOpenClaude = useCallback(() => {
-    vscode.postMessage({ type: 'openClaude' })
+  const handleOpenCodex = useCallback(() => {
+    vscode.postMessage({ type: 'openCodex' })
   }, [])
 
   const handleToggleEditMode = useCallback(() => {
@@ -399,7 +399,7 @@ export function useEditorActions(
           applyEdit(newLayout)
         }
       } else {
-        // Remove wall → paint floor with current floor settings
+        // Remove wall ??paint floor with current floor settings
         if (isWall) {
           const newLayout = paintTile(layout, effectiveCol, effectiveRow, editorState.selectedTileType, editorState.floorColor)
           if (newLayout !== layout) {
@@ -418,7 +418,7 @@ export function useEditorActions(
     } else if (editorState.activeTool === EditTool.FURNITURE_PLACE) {
       const type = editorState.selectedFurnitureType
       if (type === '') {
-        // No item selected — act like SELECT (find furniture hit)
+        // No item selected ??act like SELECT (find furniture hit)
         const hit = layout.furniture.find((f) => {
           const entry = getCatalogEntry(f.type)
           if (!entry) return false
@@ -503,7 +503,7 @@ export function useEditorActions(
     panRef,
     saveTimerRef,
     setLastSavedLayout,
-    handleOpenClaude,
+    handleOpenCodex,
     handleToggleEditMode,
     handleToolChange,
     handleTileTypeChange,
@@ -525,3 +525,4 @@ export function useEditorActions(
     handleDragMove,
   }
 }
+

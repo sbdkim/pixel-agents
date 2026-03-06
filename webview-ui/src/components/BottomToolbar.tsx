@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from 'react'
+﻿import { useState, useEffect, useRef } from 'react'
 import { SettingsModal } from './SettingsModal.js'
 import type { WorkspaceFolder } from '../hooks/useExtensionMessages.js'
 import { vscode } from '../vscodeApi.js'
 
 interface BottomToolbarProps {
   isEditMode: boolean
-  onOpenClaude: () => void
+  onOpenCodex: () => void
   onToggleEditMode: () => void
   isDebugMode: boolean
   onToggleDebugMode: () => void
@@ -46,7 +46,7 @@ const btnActive: React.CSSProperties = {
 
 export function BottomToolbar({
   isEditMode,
-  onOpenClaude,
+  onOpenCodex,
   onToggleEditMode,
   isDebugMode,
   onToggleDebugMode,
@@ -76,13 +76,13 @@ export function BottomToolbar({
     if (hasMultipleFolders) {
       setIsFolderPickerOpen((v) => !v)
     } else {
-      onOpenClaude()
+      onOpenCodex()
     }
   }
 
   const handleFolderSelect = (folder: WorkspaceFolder) => {
     setIsFolderPickerOpen(false)
-    vscode.postMessage({ type: 'openClaude', folderPath: folder.path })
+    vscode.postMessage({ type: 'openCodex', folderPath: folder.path })
   }
 
   return (
@@ -189,3 +189,4 @@ export function BottomToolbar({
     </div>
   )
 }
+

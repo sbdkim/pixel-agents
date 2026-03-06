@@ -1,4 +1,4 @@
-import { useState } from 'react'
+﻿import { useState } from 'react'
 import { vscode } from '../vscodeApi.js'
 import { isSoundEnabled, setSoundEnabled } from '../notificationSound.js'
 
@@ -32,7 +32,7 @@ export function SettingsModal({ isOpen, onClose, isDebugMode, onToggleDebugMode 
 
   return (
     <>
-      {/* Dark backdrop — click to close */}
+      {/* Dark backdrop ??click to close */}
       <div
         onClick={onClose}
         style={{
@@ -94,7 +94,7 @@ export function SettingsModal({ isOpen, onClose, isDebugMode, onToggleDebugMode 
         {/* Menu items */}
         <button
           onClick={() => {
-            vscode.postMessage({ type: 'openSessionsFolder' })
+            vscode.postMessage({ type: 'openCodexSessionsFolder' })
             onClose()
           }}
           onMouseEnter={() => setHovered('sessions')}
@@ -104,7 +104,7 @@ export function SettingsModal({ isOpen, onClose, isDebugMode, onToggleDebugMode 
             background: hovered === 'sessions' ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
           }}
         >
-          Open Sessions Folder
+          Open Codex Sessions Folder
         </button>
         <button
           onClick={() => {
@@ -194,3 +194,4 @@ export function SettingsModal({ isOpen, onClose, isDebugMode, onToggleDebugMode 
     </>
   )
 }
+
