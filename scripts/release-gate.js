@@ -25,6 +25,7 @@ function listTrackedFiles() {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
+    .filter((file) => file !== 'scripts/release-gate.js')
     .filter((file) => {
       const ext = path.extname(file).toLowerCase();
       return [

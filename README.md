@@ -23,8 +23,9 @@ Each Codex terminal you open spawns a character that walks around, sits at desks
 ## Getting Started
 
 ```bash
-git clone https://github.com/pablodelucca/pixel-agents.git
+git clone https://github.com/sbdkim/pixel-agents.git
 cd pixel-agents
+git checkout CodexAgent
 npm install
 cd webview-ui && npm install && cd ..
 npm run build

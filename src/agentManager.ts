@@ -55,10 +55,21 @@ export async function launchNewTerminal(
 	folderPath?: string,
 ): Promise<void> {
 	const folders = vscode.workspace.workspaceFolders;
-	const cwd = folderPath || folders?.[0]?.uri.fsPath;
+	let cwd = folderPath || folders?.[0]?.uri.fsPath;
 	if (!cwd) {
-		vscode.window.showWarningMessage('Pixel Agents: Open a workspace folder before starting an agent.');
-		return;
+		const activeFile = vscode.window.activeTextEditor?.document.uri.fsPath;
+		if (activeFile) {
+			cwd = path.dirname(activeFile);
+		}
+	}
+	if (!cwd) {
+		const workspaceFile = vscode.workspace.workspaceFile?.fsPath;
+		if (workspaceFile) {
+			cwd = path.dirname(workspaceFile);
+		}
+	}
+	if (!cwd) {
+		cwd = process.cwd();
 	}
 	const isMultiRoot = !!(folders && folders.length > 1);
 	const idx = nextTerminalIndexRef.current++;
