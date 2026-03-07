@@ -121,7 +121,7 @@ function App() {
 
   const isEditDirty = useCallback(() => editor.isEditMode && editor.isDirty, [editor.isEditMode, editor.isDirty])
 
-  const { agents, selectedAgent, agentTools, agentStatuses, subagentTools, subagentCharacters, layoutReady, loadedAssets, workspaceFolders } = useExtensionMessages(getOfficeState, editor.setLastSavedLayout, isEditDirty)
+  const { agents, selectedAgent, agentTools, subagentTools, subagentCharacters, agentStatuses, agentBindStates, layoutReady, loadedAssets, workspaceFolders } = useExtensionMessages(getOfficeState, editor.setLastSavedLayout, isEditDirty)
 
   const [isDebugMode, setIsDebugMode] = useState(false)
 
@@ -152,6 +152,10 @@ function App() {
 
   const handleClick = useCallback((agentId: number) => {
     vscode.postMessage({ type: 'focusAgent', id: agentId })
+  }, [])
+
+  const handleRetryBinding = useCallback((id: number) => {
+    vscode.postMessage({ type: 'retryAgentBinding', id })
   }, [])
 
   const officeState = getOfficeState()
@@ -297,9 +301,12 @@ function App() {
           agents={agents}
           selectedAgent={selectedAgent}
           agentTools={agentTools}
-          agentStatuses={agentStatuses}
           subagentTools={subagentTools}
+          subagentCharacters={subagentCharacters}
+          agentStatuses={agentStatuses}
+          agentBindStates={agentBindStates}
           onSelectAgent={handleSelectAgent}
+          onRetryBinding={handleRetryBinding}
         />
       )}
     </div>

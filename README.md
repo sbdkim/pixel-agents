@@ -51,7 +51,16 @@ Runtime signals used:
 - Turn done: `event_msg.payload.type = "task_complete"`
 - User message: `event_msg.payload.type = "user_message"`
 
+Sub-agent visualization contract:
+
+- `Task` function calls (`name === "Task"`) create a sub-agent keyed by `call_id`
+- Sub-agent label uses `arguments.description` (fallback: `Task`)
+- Matching `function_call_output` marks the sub-agent done
+- Missing/invalid lifecycle is reconciled via timeout + deterministic cleanup
+
 When you click `+ Agent`, Pixel Agents launches `codex.cmd` and auto-binds the new character to the nearest matching Codex session by `cwd` and launch time.
+
+If an agent cannot bind, open **Debug** mode and use **Retry Bind** after confirming Codex is running in that terminal.
 
 ## Layout Editor
 
@@ -79,6 +88,8 @@ npm run import-tileset
 
 - Agent-terminal sync can still desync in edge cases when terminals are rapidly created/closed
 - Session binding depends on Codex log schema and can fail if upstream schema changes
+- Sub-agent lifecycle depends on stable `Task` tool events in Codex logs
+- Timed expiry is used as fail-safe when `function_call_output` is missing
 - Tested primarily on Windows 11
 
 ## Contributions

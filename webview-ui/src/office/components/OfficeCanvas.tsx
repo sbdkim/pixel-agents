@@ -565,7 +565,6 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
       // No agent hit — check seat click while agent is selected
       if (officeState.selectedAgentId !== null) {
         const selectedCh = officeState.characters.get(officeState.selectedAgentId)
-        // Skip seat reassignment for sub-agents
         if (selectedCh && !selectedCh.isSubagent) {
           const tile = screenToTile(e.clientX, e.clientY)
           if (tile) {
@@ -584,7 +583,7 @@ export function OfficeCanvas({ officeState, onClick, isEditMode, editorState, on
                   officeState.reassignSeat(officeState.selectedAgentId, seatId)
                   officeState.selectedAgentId = null
                   officeState.cameraFollowId = null
-                  // Persist seat assignments (exclude sub-agents)
+                  // Persist seat assignments
                   const seats: Record<number, { palette: number; seatId: string | null }> = {}
                   for (const ch of officeState.characters.values()) {
                     if (ch.isSubagent) continue

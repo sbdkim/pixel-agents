@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import type { OfficeState } from '../office/engine/officeState.js'
-import type { SubagentCharacter } from '../hooks/useExtensionMessages.js'
 import { TILE_SIZE, CharacterState } from '../office/types.js'
 
 interface AgentLabelsProps {
@@ -10,7 +9,6 @@ interface AgentLabelsProps {
   containerRef: React.RefObject<HTMLDivElement | null>
   zoom: number
   panRef: React.RefObject<{ x: number; y: number }>
-  subagentCharacters: SubagentCharacter[]
 }
 
 export function AgentLabels({
@@ -20,7 +18,6 @@ export function AgentLabels({
   containerRef,
   zoom,
   panRef,
-  subagentCharacters,
 }: AgentLabelsProps) {
   const [, setTick] = useState(0)
   useEffect(() => {
@@ -46,18 +43,9 @@ export function AgentLabels({
   const deviceOffsetX = Math.floor((canvasW - mapW) / 2) + Math.round(panRef.current.x)
   const deviceOffsetY = Math.floor((canvasH - mapH) / 2) + Math.round(panRef.current.y)
 
-  // Build sub-agent label lookup
-  const subLabelMap = new Map<number, string>()
-  for (const sub of subagentCharacters) {
-    subLabelMap.set(sub.id, sub.label)
-  }
-
-  // All character IDs to render labels for (regular agents + sub-agents)
-  const allIds = [...agents, ...subagentCharacters.map((s) => s.id)]
-
   return (
     <>
-      {allIds.map((id) => {
+      {agents.map((id) => {
         const ch = officeState.characters.get(id)
         if (!ch) return null
 
@@ -69,7 +57,6 @@ export function AgentLabels({
         const status = agentStatuses[id]
         const isWaiting = status === 'waiting'
         const isActive = ch.isActive
-        const isSub = ch.isSubagent
 
         let dotColor = 'transparent'
         if (isWaiting) {
@@ -78,7 +65,7 @@ export function AgentLabels({
           dotColor = 'var(--vscode-charts-blue, #3794ff)'
         }
 
-        const labelText = subLabelMap.get(id) || `Agent #${id}`
+        const labelText = `Agent #${id}`
 
         return (
           <div
@@ -109,16 +96,12 @@ export function AgentLabels({
             )}
             <span
               style={{
-                fontSize: isSub ? '16px' : '18px',
-                fontStyle: isSub ? 'italic' : undefined,
+                fontSize: '18px',
                 color: 'var(--vscode-foreground)',
                 background: 'rgba(30,30,46,0.7)',
                 padding: '1px 4px',
                 borderRadius: 2,
                 whiteSpace: 'nowrap',
-                maxWidth: isSub ? 120 : undefined,
-                overflow: isSub ? 'hidden' : undefined,
-                textOverflow: isSub ? 'ellipsis' : undefined,
               }}
             >
               {labelText}

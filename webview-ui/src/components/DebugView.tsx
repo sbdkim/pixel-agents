@@ -1,13 +1,18 @@
 import type { ToolActivity } from '../office/types.js'
+import type { AgentBindState } from '../hooks/useExtensionMessages.js'
+import type { SubagentCharacter } from '../hooks/useExtensionMessages.js'
 import { vscode } from '../vscodeApi.js'
 
 interface DebugViewProps {
   agents: number[]
   selectedAgent: number | null
   agentTools: Record<number, ToolActivity[]>
-  agentStatuses: Record<number, string>
   subagentTools: Record<number, Record<string, ToolActivity[]>>
+  subagentCharacters: SubagentCharacter[]
+  agentStatuses: Record<number, string>
+  agentBindStates: Record<number, AgentBindState>
   onSelectAgent: (id: number) => void
+  onRetryBinding: (id: number) => void
 }
 
 /** Z-index just below the floating toolbar (50) so the toolbar stays on top */
@@ -54,15 +59,19 @@ export function DebugView({
   agents,
   selectedAgent,
   agentTools,
-  agentStatuses,
   subagentTools,
+  subagentCharacters,
+  agentStatuses,
+  agentBindStates,
   onSelectAgent,
+  onRetryBinding,
 }: DebugViewProps) {
   const renderAgentCard = (id: number) => {
     const isSelected = selectedAgent === id
     const tools = agentTools[id] || []
     const subs = subagentTools[id] || {}
     const status = agentStatuses[id]
+    const bindState = agentBindStates[id]
     const hasActiveTools = tools.some((t) => !t.done)
     return (
       <div
@@ -100,7 +109,7 @@ export function DebugView({
             }}
             title="Close agent"
           >
-            ✕
+            x
           </button>
         </span>
         {(tools.length > 0 || status === 'waiting') && (
@@ -152,6 +161,46 @@ export function DebugView({
             )}
           </div>
         )}
+        <div style={{ marginTop: 4, paddingLeft: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {subagentCharacters.some((s) => s.parentAgentId === id) && (
+            <span style={{ fontSize: '16px', opacity: 0.75 }}>
+              Sub-agents: {subagentCharacters.filter((s) => s.parentAgentId === id).length}
+            </span>
+          )}
+          <span style={{ fontSize: '18px', opacity: 0.85 }}>
+            Session: {bindState?.bound ? 'Bound' : 'Unbound'}
+          </span>
+          {bindState?.sessionFile && (
+            <span style={{ fontSize: '16px', opacity: 0.7, wordBreak: 'break-all' }}>
+              {bindState.sessionFile}
+            </span>
+          )}
+          {bindState?.reason && !bindState.bound && (
+            <span style={{ fontSize: '16px', opacity: 0.75 }}>
+              Reason: {bindState.reason}
+            </span>
+          )}
+          {bindState?.lastEvent && (
+            <span style={{ fontSize: '16px', opacity: 0.75 }}>
+              Last event: {bindState.lastEvent}
+              {bindState.lastEventAtMs ? ` @ ${new Date(bindState.lastEventAtMs).toLocaleTimeString()}` : ''}
+            </span>
+          )}
+          {!bindState?.bound && (
+            <button
+              onClick={() => onRetryBinding(id)}
+              style={{
+                marginTop: 2,
+                borderRadius: 0,
+                padding: '4px 8px',
+                fontSize: '18px',
+                width: 'fit-content',
+              }}
+            >
+              Retry Bind
+            </button>
+          )}
+        </div>
       </div>
     )
   }
@@ -178,3 +227,4 @@ export function DebugView({
     </div>
   )
 }
+

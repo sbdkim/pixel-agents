@@ -30,7 +30,7 @@ function getActivityText(
       if (activeTool.permissionWait) return 'Needs approval'
       return activeTool.status
     }
-    // All tools done but agent still active (mid-turn) — keep showing last tool status
+    // All tools done but agent still active (mid-turn): keep showing last tool status
     if (isActive) {
       const lastTool = tools[tools.length - 1]
       if (lastTool) return lastTool.status
@@ -75,8 +75,6 @@ export function ToolOverlay({
 
   const selectedId = officeState.selectedAgentId
   const hoveredId = officeState.hoveredAgentId
-
-  // All character IDs
   const allIds = [...agents, ...subagentCharacters.map((s) => s.id)]
 
   return (
@@ -99,16 +97,14 @@ export function ToolOverlay({
 
         // Get activity text
         const subHasPermission = isSub && ch.bubbleType === 'permission'
-        let activityText: string
+        let activityText = getActivityText(id, agentTools, ch.isActive)
         if (isSub) {
           if (subHasPermission) {
             activityText = 'Needs approval'
           } else {
             const sub = subagentCharacters.find((s) => s.id === id)
-            activityText = sub ? sub.label : 'Subtask'
+            activityText = sub ? sub.label : 'Task'
           }
-        } else {
-          activityText = getActivityText(id, agentTools, ch.isActive)
         }
 
         // Determine dot color
@@ -219,7 +215,7 @@ export function ToolOverlay({
                     (e.currentTarget as HTMLElement).style.color = 'var(--pixel-close-text)'
                   }}
                 >
-                  ×
+                  x
                 </button>
               )}
             </div>
@@ -229,3 +225,4 @@ export function ToolOverlay({
     </>
   )
 }
+

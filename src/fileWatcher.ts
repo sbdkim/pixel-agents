@@ -9,6 +9,8 @@ import {
 	PROJECT_SCAN_INTERVAL_MS,
 	SESSION_BIND_TIMEOUT_MS,
 	SESSION_MATCH_WINDOW_MS,
+	SESSION_REBIND_WINDOW_MS,
+	ADOPT_RECENT_SESSION_MS,
 } from './constants.js';
 
 interface SessionMetaCacheEntry {
@@ -28,7 +30,9 @@ function listSessionFiles(sessionsRoot: string): string[] {
 	const stack: string[] = [sessionsRoot];
 	while (stack.length > 0) {
 		const current = stack.pop();
-		if (!current) continue;
+		if (!current) {
+			continue;
+		}
 		let entries: fs.Dirent[];
 		try {
 			entries = fs.readdirSync(current, { withFileTypes: true });
@@ -76,11 +80,26 @@ function readSessionMeta(filePath: string, stat: fs.Stats): SessionMetaCacheEntr
 			}
 		}
 	} catch {
-		// leave entry as nulls
+		// leave as nulls
 	}
 
 	sessionMetaCache.set(filePath, entry);
 	return entry;
+}
+
+function setAgentBindState(
+	agentId: number,
+	agent: AgentState,
+	webview: vscode.Webview | undefined,
+	reason: string | null,
+): void {
+	webview?.postMessage({
+		type: 'agentBindState',
+		id: agentId,
+		bound: agent.sessionBound,
+		sessionFile: agent.sessionBound ? agent.jsonlFile : null,
+		reason,
+	});
 }
 
 function bindAgentToFile(
@@ -95,12 +114,23 @@ function bindAgentToFile(
 	persistAgents: () => void,
 ): void {
 	const agent = agents.get(agentId);
-	if (!agent) return;
+	if (!agent) {
+		return;
+	}
 
 	agent.jsonlFile = filePath;
 	agent.sessionBound = true;
 	agent.bindWarningSent = false;
+	agent.rebindRequestedAtMs = null;
 	agent.lineBuffer = '';
+	for (const timer of agent.subagentTimers.values()) {
+		clearTimeout(timer);
+	}
+	agent.subagentTimers.clear();
+	for (const callId of agent.subagentStates.keys()) {
+		webview?.postMessage({ type: 'subagentClear', id: agentId, parentToolId: callId });
+	}
+	agent.subagentStates.clear();
 	try {
 		const stat = fs.statSync(filePath);
 		agent.fileOffset = stat.size;
@@ -109,8 +139,144 @@ function bindAgentToFile(
 	}
 
 	persistAgents();
-	console.log(`[Pixel Agents] Agent ${agentId}: bound to Codex session ${path.basename(filePath)}`);
-	startFileWatching(agentId, filePath, agents, fileWatchers, pollingTimers, waitingTimers, permissionTimers, webview);
+	console.log(`[Pixel Agents] bind_success agent=${agentId} file=${path.basename(filePath)}`);
+	setAgentBindState(agentId, agent, webview, null);
+	startFileWatching(agentId, filePath, agents, fileWatchers, pollingTimers, waitingTimers, permissionTimers, webview, persistAgents);
+}
+
+function pickBestSessionForAgent(agent: AgentState, files: string[], usedFiles: Set<string>, now: number): string | null {
+	const normalizedCwd = normalizePath(agent.cwd);
+	let bestFile: string | null = null;
+	let bestScore = Number.MAX_SAFE_INTEGER;
+
+	const referenceMs = agent.rebindRequestedAtMs ?? agent.launchTimeMs;
+	const lowerBound = agent.rebindRequestedAtMs
+		? now - SESSION_REBIND_WINDOW_MS
+		: agent.launchTimeMs - SESSION_MATCH_WINDOW_MS;
+
+	for (const filePath of files) {
+		if (usedFiles.has(filePath)) {
+			continue;
+		}
+
+		let stat: fs.Stats;
+		try {
+			stat = fs.statSync(filePath);
+		} catch {
+			continue;
+		}
+
+		if (stat.mtimeMs < lowerBound || stat.mtimeMs > now + 1000) {
+			continue;
+		}
+
+		const meta = readSessionMeta(filePath, stat);
+		if (!meta.cwd || normalizePath(meta.cwd) !== normalizedCwd) {
+			continue;
+		}
+
+		const ts = meta.timestampMs ?? stat.mtimeMs;
+		const score = Math.abs(ts - referenceMs) + Math.abs(stat.mtimeMs - referenceMs);
+		if (score < bestScore) {
+			bestScore = score;
+			bestFile = filePath;
+		}
+	}
+
+	return bestFile;
+}
+
+function adoptActiveCodexTerminal(
+	files: string[],
+	now: number,
+	nextAgentIdRef: { current: number },
+	activeAgentIdRef: { current: number | null },
+	agents: Map<number, AgentState>,
+	fileWatchers: Map<number, fs.FSWatcher>,
+	pollingTimers: Map<number, ReturnType<typeof setInterval>>,
+	waitingTimers: Map<number, ReturnType<typeof setTimeout>>,
+	permissionTimers: Map<number, ReturnType<typeof setTimeout>>,
+	webview: vscode.Webview | undefined,
+	persistAgents: () => void,
+): void {
+	const terminal = vscode.window.activeTerminal;
+	if (!terminal) {
+		return;
+	}
+
+	for (const existing of agents.values()) {
+		if (existing.terminalRef === terminal) {
+			return;
+		}
+	}
+
+	if (!terminal.name.toLowerCase().includes('codex')) {
+		return;
+	}
+
+	let newestFile: string | null = null;
+	let newestMtime = -1;
+	for (const filePath of files) {
+		let stat: fs.Stats;
+		try {
+			stat = fs.statSync(filePath);
+		} catch {
+			continue;
+		}
+		if (now - stat.mtimeMs > ADOPT_RECENT_SESSION_MS) {
+			continue;
+		}
+		if (stat.mtimeMs > newestMtime) {
+			newestMtime = stat.mtimeMs;
+			newestFile = filePath;
+		}
+	}
+
+	if (!newestFile) {
+		return;
+	}
+
+	const workspaceCwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+	const id = nextAgentIdRef.current++;
+	const agent: AgentState = {
+		id,
+		terminalRef: terminal,
+		projectDir: path.dirname(path.dirname(path.dirname(path.dirname(newestFile)))),
+		cwd: workspaceCwd,
+		jsonlFile: '',
+		sessionBound: false,
+		launchTimeMs: now,
+		bindWarningSent: false,
+		rebindRequestedAtMs: null,
+		lastEvent: null,
+		lastEventAtMs: null,
+		fileOffset: 0,
+		lineBuffer: '',
+		activeToolIds: new Set(),
+		activeToolStatuses: new Map(),
+		activeToolNames: new Map(),
+		subagentStates: new Map(),
+		subagentTimers: new Map(),
+		subagentHistory: [],
+		isWaiting: false,
+	};
+	agents.set(id, agent);
+	activeAgentIdRef.current = id;
+	persistAgents();
+	console.log(`[Pixel Agents] adopted terminal "${terminal.name}" as agent ${id}`);
+	webview?.postMessage({ type: 'agentCreated', id });
+
+	bindAgentToFile(
+		id,
+		newestFile,
+		agents,
+		fileWatchers,
+		pollingTimers,
+		waitingTimers,
+		permissionTimers,
+		webview,
+		persistAgents,
+	);
 }
 
 export function startFileWatching(
@@ -122,10 +288,11 @@ export function startFileWatching(
 	waitingTimers: Map<number, ReturnType<typeof setTimeout>>,
 	permissionTimers: Map<number, ReturnType<typeof setTimeout>>,
 	webview: vscode.Webview | undefined,
+	persistAgents?: () => void,
 ): void {
 	try {
 		const watcher = fs.watch(filePath, () => {
-			readNewLines(agentId, agents, waitingTimers, permissionTimers, webview);
+			readNewLines(agentId, agents, waitingTimers, permissionTimers, webview, persistAgents);
 		});
 		fileWatchers.set(agentId, watcher);
 	} catch (e) {
@@ -134,7 +301,7 @@ export function startFileWatching(
 
 	try {
 		fs.watchFile(filePath, { interval: FILE_WATCHER_POLL_INTERVAL_MS }, () => {
-			readNewLines(agentId, agents, waitingTimers, permissionTimers, webview);
+			readNewLines(agentId, agents, waitingTimers, permissionTimers, webview, persistAgents);
 		});
 	} catch (e) {
 		console.log(`[Pixel Agents] fs.watchFile failed for agent ${agentId}: ${e}`);
@@ -143,10 +310,14 @@ export function startFileWatching(
 	const interval = setInterval(() => {
 		if (!agents.has(agentId)) {
 			clearInterval(interval);
-			try { fs.unwatchFile(filePath); } catch { /* ignore */ }
+			try {
+				fs.unwatchFile(filePath);
+			} catch {
+				// ignore
+			}
 			return;
 		}
-		readNewLines(agentId, agents, waitingTimers, permissionTimers, webview);
+		readNewLines(agentId, agents, waitingTimers, permissionTimers, webview, persistAgents);
 	}, FILE_WATCHER_POLL_INTERVAL_MS);
 	pollingTimers.set(agentId, interval);
 }
@@ -157,12 +328,17 @@ export function readNewLines(
 	waitingTimers: Map<number, ReturnType<typeof setTimeout>>,
 	permissionTimers: Map<number, ReturnType<typeof setTimeout>>,
 	webview: vscode.Webview | undefined,
+	persistAgents?: () => void,
 ): void {
 	const agent = agents.get(agentId);
-	if (!agent || !agent.sessionBound) return;
+	if (!agent || !agent.sessionBound) {
+		return;
+	}
 	try {
 		const stat = fs.statSync(agent.jsonlFile);
-		if (stat.size <= agent.fileOffset) return;
+		if (stat.size <= agent.fileOffset) {
+			return;
+		}
 
 		const buf = Buffer.alloc(stat.size - agent.fileOffset);
 		const fd = fs.openSync(agent.jsonlFile, 'r');
@@ -175,11 +351,13 @@ export function readNewLines(
 		agent.lineBuffer = lines.pop() || '';
 
 		for (const line of lines) {
-			if (!line.trim()) continue;
-			processTranscriptLine(agentId, line, agents, waitingTimers, permissionTimers, webview);
+			if (!line.trim()) {
+				continue;
+			}
+			processTranscriptLine(agentId, line, agents, waitingTimers, permissionTimers, webview, persistAgents);
 		}
 	} catch (e) {
-		console.log(`[Pixel Agents] Read error for agent ${agentId}: ${e}`);
+		console.log(`[Pixel Agents] read_error agent=${agentId} file=${path.basename(agent.jsonlFile)} err=${String(e)}`);
 	}
 }
 
@@ -187,8 +365,8 @@ export function ensureProjectScan(
 	projectDir: string,
 	knownJsonlFiles: Set<string>,
 	projectScanTimerRef: { current: ReturnType<typeof setInterval> | null },
-	_activeAgentIdRef: { current: number | null },
-	_nextAgentIdRef: { current: number },
+	activeAgentIdRef: { current: number | null },
+	nextAgentIdRef: { current: number },
 	agents: Map<number, AgentState>,
 	fileWatchers: Map<number, fs.FSWatcher>,
 	pollingTimers: Map<number, ReturnType<typeof setInterval>>,
@@ -197,12 +375,16 @@ export function ensureProjectScan(
 	webview: vscode.Webview | undefined,
 	persistAgents: () => void,
 ): void {
-	if (projectScanTimerRef.current) return;
+	if (projectScanTimerRef.current) {
+		return;
+	}
 
 	projectScanTimerRef.current = setInterval(() => {
 		scanForNewJsonlFiles(
 			projectDir,
 			knownJsonlFiles,
+			activeAgentIdRef,
+			nextAgentIdRef,
 			agents,
 			fileWatchers,
 			pollingTimers,
@@ -214,9 +396,11 @@ export function ensureProjectScan(
 	}, PROJECT_SCAN_INTERVAL_MS);
 }
 
-function scanForNewJsonlFiles(
+export function triggerProjectScanNow(
 	projectDir: string,
 	knownJsonlFiles: Set<string>,
+	activeAgentIdRef: { current: number | null },
+	nextAgentIdRef: { current: number },
 	agents: Map<number, AgentState>,
 	fileWatchers: Map<number, fs.FSWatcher>,
 	pollingTimers: Map<number, ReturnType<typeof setInterval>>,
@@ -225,6 +409,37 @@ function scanForNewJsonlFiles(
 	webview: vscode.Webview | undefined,
 	persistAgents: () => void,
 ): void {
+	scanForNewJsonlFiles(
+		projectDir,
+		knownJsonlFiles,
+		activeAgentIdRef,
+		nextAgentIdRef,
+		agents,
+		fileWatchers,
+		pollingTimers,
+		waitingTimers,
+		permissionTimers,
+		webview,
+		persistAgents,
+	);
+}
+
+function scanForNewJsonlFiles(
+	projectDir: string,
+	knownJsonlFiles: Set<string>,
+	activeAgentIdRef: { current: number | null },
+	nextAgentIdRef: { current: number },
+	agents: Map<number, AgentState>,
+	fileWatchers: Map<number, fs.FSWatcher>,
+	pollingTimers: Map<number, ReturnType<typeof setInterval>>,
+	waitingTimers: Map<number, ReturnType<typeof setTimeout>>,
+	permissionTimers: Map<number, ReturnType<typeof setTimeout>>,
+	webview: vscode.Webview | undefined,
+	persistAgents: () => void,
+): void {
+	if (!fs.existsSync(projectDir)) {
+		return;
+	}
 	const files = listSessionFiles(projectDir);
 	for (const file of files) {
 		knownJsonlFiles.add(file);
@@ -238,37 +453,15 @@ function scanForNewJsonlFiles(
 		}
 	}
 
+	let unboundCount = 0;
 	for (const [agentId, agent] of agents) {
-		if (agent.sessionBound) continue;
-
-		let bestFile: string | null = null;
-		let bestScore = Number.MAX_SAFE_INTEGER;
-		const normalizedCwd = normalizePath(agent.cwd);
-
-		for (const filePath of files) {
-			if (boundFiles.has(filePath)) continue;
-
-			let stat: fs.Stats;
-			try {
-				stat = fs.statSync(filePath);
-			} catch {
-				continue;
-			}
-
-			if (stat.mtimeMs < agent.launchTimeMs - SESSION_MATCH_WINDOW_MS) continue;
-			if (stat.mtimeMs > now + 1000) continue;
-
-			const meta = readSessionMeta(filePath, stat);
-			if (!meta.cwd || normalizePath(meta.cwd) !== normalizedCwd) continue;
-
-			const ts = meta.timestampMs ?? stat.mtimeMs;
-			const score = Math.abs(ts - agent.launchTimeMs) + Math.abs(stat.mtimeMs - agent.launchTimeMs);
-			if (score < bestScore) {
-				bestScore = score;
-				bestFile = filePath;
-			}
+		if (agent.sessionBound) {
+			continue;
 		}
+		unboundCount += 1;
 
+		console.log(`[Pixel Agents] bind_attempt agent=${agentId} cwd=${agent.cwd}`);
+		const bestFile = pickBestSessionForAgent(agent, files, boundFiles, now);
 		if (bestFile) {
 			bindAgentToFile(
 				agentId,
@@ -287,11 +480,29 @@ function scanForNewJsonlFiles(
 
 		if (!agent.bindWarningSent && now - agent.launchTimeMs > SESSION_BIND_TIMEOUT_MS) {
 			agent.bindWarningSent = true;
+			console.log(`[Pixel Agents] bind_timeout agent=${agentId}`);
 			vscode.window.showWarningMessage(
-				`Pixel Agents: Timed out waiting for a Codex session for terminal "${agent.terminalRef.name}". Start Codex in that terminal to connect the character.`,
+				`Pixel Agents: Timed out waiting for a Codex session for terminal "${agent.terminalRef.name}". Start Codex in that terminal and click Retry in Debug View.`,
 			);
+			setAgentBindState(agentId, agent, webview, 'timeout');
 			persistAgents();
 		}
+	}
+
+	if (unboundCount === 0) {
+		adoptActiveCodexTerminal(
+			files,
+			now,
+			nextAgentIdRef,
+			activeAgentIdRef,
+			agents,
+			fileWatchers,
+			pollingTimers,
+			waitingTimers,
+			permissionTimers,
+			webview,
+			persistAgents,
+		);
 	}
 }
 
@@ -307,17 +518,33 @@ export function reassignAgentToFile(
 	persistAgents: () => void,
 ): void {
 	const agent = agents.get(agentId);
-	if (!agent) return;
+	if (!agent) {
+		return;
+	}
 
 	fileWatchers.get(agentId)?.close();
 	fileWatchers.delete(agentId);
 	const pt = pollingTimers.get(agentId);
-	if (pt) { clearInterval(pt); }
+	if (pt) {
+		clearInterval(pt);
+	}
 	pollingTimers.delete(agentId);
-	try { fs.unwatchFile(agent.jsonlFile); } catch { /* ignore */ }
+	try {
+		fs.unwatchFile(agent.jsonlFile);
+	} catch {
+		// ignore
+	}
 
 	cancelWaitingTimer(agentId, waitingTimers);
 	cancelPermissionTimer(agentId, permissionTimers);
+	for (const timer of agent.subagentTimers.values()) {
+		clearTimeout(timer);
+	}
+	agent.subagentTimers.clear();
+	for (const callId of agent.subagentStates.keys()) {
+		webview?.postMessage({ type: 'subagentClear', id: agentId, parentToolId: callId });
+	}
+	agent.subagentStates.clear();
 	clearAgentActivity(agent, agentId, permissionTimers, webview);
 
 	agent.jsonlFile = newFilePath;
@@ -326,6 +553,6 @@ export function reassignAgentToFile(
 	agent.lineBuffer = '';
 	persistAgents();
 
-	startFileWatching(agentId, newFilePath, agents, fileWatchers, pollingTimers, waitingTimers, permissionTimers, webview);
-	readNewLines(agentId, agents, waitingTimers, permissionTimers, webview);
+	startFileWatching(agentId, newFilePath, agents, fileWatchers, pollingTimers, waitingTimers, permissionTimers, webview, persistAgents);
+	readNewLines(agentId, agents, waitingTimers, permissionTimers, webview, persistAgents);
 }

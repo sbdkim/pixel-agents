@@ -59,6 +59,8 @@
     "package": "npm run check-types && npm run lint && node esbuild.js --production && npm run build:webview",
     "check-types": "tsc --noEmit",
     "lint": "eslint src",
+    "release:gate": "node scripts/release-gate.js",
+    "release:verify": "npm run check-types && npm run build && npm run release:gate",
     "import-tileset": "tsx scripts/0-import-tileset.ts"
   },
   "devDependencies": {

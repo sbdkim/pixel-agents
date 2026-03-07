@@ -4,7 +4,13 @@ export const FILE_WATCHER_POLL_INTERVAL_MS = 1000;
 export const PROJECT_SCAN_INTERVAL_MS = 1000;
 export const SESSION_BIND_TIMEOUT_MS = 60000;
 export const SESSION_MATCH_WINDOW_MS = 5 * 60 * 1000;
+export const SESSION_REBIND_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const ADOPT_RECENT_SESSION_MS = 2 * 60 * 1000;
 export const TOOL_DONE_DELAY_MS = 300;
+export const SUBAGENT_TIMEOUT_MS = 60_000;
+export const SUBAGENT_DONE_CLEAR_DELAY_MS = 1_000;
+export const SUBAGENT_ORPHAN_CLEAR_DELAY_MS = 2_500;
+export const SUBAGENT_HISTORY_MAX = 200;
 
 // Display truncation
 export const BASH_COMMAND_DISPLAY_MAX_LENGTH = 30;

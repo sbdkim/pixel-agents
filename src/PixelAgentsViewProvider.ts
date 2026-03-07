@@ -12,7 +12,7 @@ import {
 	sendLayout,
 	getProjectDirPath,
 } from './agentManager.js';
-import { ensureProjectScan } from './fileWatcher.js';
+import { ensureProjectScan, triggerProjectScanNow } from './fileWatcher.js';
 import {
 	loadFurnitureAssets,
 	sendAssetsToWebview,
@@ -199,6 +199,41 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
 				if (fs.existsSync(sessionsDir)) {
 					vscode.env.openExternal(vscode.Uri.file(sessionsDir));
 				}
+			} else if (message.type === 'retryAgentBinding') {
+				const id = message.id as number;
+				const agent = this.agents.get(id);
+				if (!agent) {
+					return;
+				}
+				for (const timer of agent.subagentTimers.values()) {
+					clearTimeout(timer);
+				}
+				agent.subagentTimers.clear();
+				for (const callId of agent.subagentStates.keys()) {
+					this.webview?.postMessage({ type: 'subagentClear', id, parentToolId: callId });
+				}
+				agent.subagentStates.clear();
+				agent.sessionBound = false;
+				agent.jsonlFile = '';
+				agent.fileOffset = 0;
+				agent.lineBuffer = '';
+				agent.bindWarningSent = false;
+				agent.rebindRequestedAtMs = Date.now();
+				this.persistAgents();
+				this.webview?.postMessage({ type: 'agentBindState', id, bound: false, sessionFile: null, reason: 'retrying' });
+				triggerProjectScanNow(
+					getProjectDirPath(),
+					this.knownJsonlFiles,
+					this.activeAgentId,
+					this.nextAgentId,
+					this.agents,
+					this.fileWatchers,
+					this.pollingTimers,
+					this.waitingTimers,
+					this.permissionTimers,
+					this.webview,
+					this.persistAgents,
+				);
 			} else if (message.type === 'exportLayout') {
 				const layout = readLayoutFromFile();
 				if (!layout) {

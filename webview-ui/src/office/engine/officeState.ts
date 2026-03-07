@@ -38,9 +38,9 @@ export class OfficeState {
   cameraFollowId: number | null = null
   hoveredAgentId: number | null = null
   hoveredTile: { col: number; row: number } | null = null
-  /** Maps "parentId:toolId" → sub-agent character ID (negative) */
+  /** Maps "parentId:toolId" -> sub-agent character ID (negative) */
   subagentIdMap: Map<string, number> = new Map()
-  /** Reverse lookup: sub-agent character ID → parent info */
+  /** Reverse lookup: sub-agent character ID -> parent info */
   subagentMeta: Map<number, { parentAgentId: number; parentToolId: string }> = new Map()
   private nextSubagentId = -1
 
@@ -169,10 +169,10 @@ export class OfficeState {
   /**
    * Pick a diverse palette for a new agent based on currently active agents.
    * First 6 agents each get a unique skin (random order). Beyond 6, skins
-   * repeat in balanced rounds with a random hue shift (≥45°).
+   * repeat in balanced rounds with a random hue shift (>=45 deg).
    */
   private pickDiversePalette(): { palette: number; hueShift: number } {
-    // Count how many non-sub-agents use each base palette (0-5)
+    // Count usage of each base palette (0-5)
     const counts = new Array(PALETTE_COUNT).fill(0) as number[]
     for (const ch of this.characters.values()) {
       if (ch.isSubagent) continue
@@ -185,7 +185,7 @@ export class OfficeState {
       if (counts[i] === minCount) available.push(i)
     }
     const palette = available[Math.floor(Math.random() * available.length)]
-    // First round (minCount === 0): no hue shift. Subsequent rounds: random ≥45°.
+    // First round (minCount === 0): no hue shift. Subsequent rounds: random >=45 deg.
     let hueShift = 0
     if (minCount > 0) {
       hueShift = HUE_SHIFT_MIN_DEG + Math.floor(Math.random() * HUE_SHIFT_RANGE_DEG)
@@ -225,7 +225,7 @@ export class OfficeState {
       seat.assigned = true
       ch = createCharacter(id, palette, seatId, seat, hueShift)
     } else {
-      // No seats — spawn at random walkable tile
+      // No seats: spawn at random walkable tile
       const spawn = this.walkableTiles.length > 0
         ? this.walkableTiles[Math.floor(Math.random() * this.walkableTiles.length)]
         : { col: 1, row: 1 }
@@ -250,6 +250,9 @@ export class OfficeState {
   removeAgent(id: number): void {
     const ch = this.characters.get(id)
     if (!ch) return
+    if (!ch.isSubagent) {
+      this.removeAllSubagents(id)
+    }
     if (ch.matrixEffect === 'despawn') return // already despawning
     // Free seat and clear selection immediately
     if (ch.seatId) {
@@ -298,7 +301,7 @@ export class OfficeState {
       ch.frame = 0
       ch.frameTimer = 0
     } else {
-      // Already at seat or no path — sit down
+      // Already at seat or no path: sit down
       ch.state = CharacterState.TYPE
       ch.dir = seat.facingDir
       ch.frame = 0
@@ -325,7 +328,7 @@ export class OfficeState {
       ch.frame = 0
       ch.frameTimer = 0
     } else {
-      // Already at seat — sit down
+      // Already at seat: sit down
       ch.state = CharacterState.TYPE
       ch.dir = seat.facingDir
       ch.frame = 0
@@ -367,7 +370,6 @@ export class OfficeState {
     const palette = parentCh ? parentCh.palette : 0
     const hueShift = parentCh ? parentCh.hueShift : 0
 
-    // Find the free seat closest to the parent agent
     const parentCol = parentCh ? parentCh.tileCol : 0
     const parentRow = parentCh ? parentCh.tileRow : 0
     const dist = (c: number, r: number) =>
@@ -391,7 +393,6 @@ export class OfficeState {
       seat.assigned = true
       ch = createCharacter(id, palette, bestSeatId, seat, hueShift)
     } else {
-      // No seats — spawn at closest walkable tile to parent
       let spawn = { col: 1, row: 1 }
       if (this.walkableTiles.length > 0) {
         let closest = this.walkableTiles[0]
@@ -423,7 +424,7 @@ export class OfficeState {
     return id
   }
 
-  /** Remove a specific sub-agent character and free its seat */
+  /** Remove a specific sub-agent character and free its seat. */
   removeSubagent(parentAgentId: number, parentToolId: string): void {
     const key = `${parentAgentId}:${parentToolId}`
     const id = this.subagentIdMap.get(key)
@@ -432,7 +433,6 @@ export class OfficeState {
     const ch = this.characters.get(id)
     if (ch) {
       if (ch.matrixEffect === 'despawn') {
-        // Already despawning — just clean up maps
         this.subagentIdMap.delete(key)
         this.subagentMeta.delete(id)
         return
@@ -441,20 +441,18 @@ export class OfficeState {
         const seat = this.seats.get(ch.seatId)
         if (seat) seat.assigned = false
       }
-      // Start despawn animation — keep character in map for rendering
       ch.matrixEffect = 'despawn'
       ch.matrixEffectTimer = 0
       ch.matrixEffectSeeds = matrixEffectSeeds()
       ch.bubbleType = null
     }
-    // Clean up tracking maps immediately so keys don't collide
     this.subagentIdMap.delete(key)
     this.subagentMeta.delete(id)
     if (this.selectedAgentId === id) this.selectedAgentId = null
     if (this.cameraFollowId === id) this.cameraFollowId = null
   }
 
-  /** Remove all sub-agents belonging to a parent agent */
+  /** Remove all sub-agents belonging to a parent agent. */
   removeAllSubagents(parentAgentId: number): void {
     const toRemove: string[] = []
     for (const [key, id] of this.subagentIdMap) {
@@ -463,7 +461,6 @@ export class OfficeState {
         const ch = this.characters.get(id)
         if (ch) {
           if (ch.matrixEffect === 'despawn') {
-            // Already despawning — just clean up maps
             this.subagentMeta.delete(id)
             toRemove.push(key)
             continue
@@ -472,7 +469,6 @@ export class OfficeState {
             const seat = this.seats.get(ch.seatId)
             if (seat) seat.assigned = false
           }
-          // Start despawn animation
           ch.matrixEffect = 'despawn'
           ch.matrixEffectTimer = 0
           ch.matrixEffectSeeds = matrixEffectSeeds()
@@ -489,7 +485,7 @@ export class OfficeState {
     }
   }
 
-  /** Look up the sub-agent character ID for a given parent+toolId, or null */
+  /** Look up the sub-agent character ID for a given parent+toolId, or null. */
   getSubagentId(parentAgentId: number, parentToolId: string): number | null {
     return this.subagentIdMap.get(`${parentAgentId}:${parentToolId}`) ?? null
   }
@@ -600,7 +596,7 @@ export class OfficeState {
     }
   }
 
-  /** Dismiss bubble on click — permission: instant, waiting: quick fade */
+  /** Dismiss bubble on click: permission instant, waiting quick fade */
   dismissBubble(id: number): void {
     const ch = this.characters.get(id)
     if (!ch || !ch.bubbleType) return
@@ -621,12 +617,12 @@ export class OfficeState {
         ch.matrixEffectTimer += dt
         if (ch.matrixEffectTimer >= MATRIX_EFFECT_DURATION) {
           if (ch.matrixEffect === 'spawn') {
-            // Spawn complete — clear effect, resume normal FSM
+            // Spawn complete: clear effect, resume normal FSM
             ch.matrixEffect = null
             ch.matrixEffectTimer = 0
             ch.matrixEffectSeeds = []
           } else {
-            // Despawn complete — mark for deletion
+            // Despawn complete: mark for deletion
             toDelete.push(ch.id)
           }
         }
