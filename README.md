@@ -20,7 +20,7 @@ Each Codex terminal you open spawns a character that walks around, sits at desks
 - VS Code 1.107.0 or later
 - Codex CLI (`codex.cmd`) installed and available in your shell
 
-## Getting Started
+## Getting Started (Developer)
 
 ```bash
 git clone https://github.com/sbdkim/pixel-agents.git
@@ -33,12 +33,23 @@ npm run build
 
 Then press **F5** in VS Code to launch the Extension Development Host.
 
-## Usage
+## First Run in Extension Development Host
 
-1. Open the **Pixel Agents** panel
-2. Click **+ Agent** to spawn a new Codex terminal and character
-3. Start working in Codex and watch the character react in real time
-4. Click **Layout** to customize your office
+1. In the **Extension Development Host** window, open a real folder:
+   - `File -> Open Folder...`
+2. Open Command Palette:
+   - Press `Ctrl+Shift+P` (Windows/Linux) or `Cmd+Shift+P` (macOS)
+3. Run:
+   - `Pixel Agents: Show Panel`
+4. In the panel, click **+ Agent** to launch a Codex terminal + character.
+5. Use the spawned terminal normally; the character state updates from Codex session logs.
+6. Click **Layout** to customize your office.
+
+## Usage Tips
+
+- If `+ Agent` shows `Open a workspace folder before starting an agent`, make sure you used `File -> Open Folder...` in the Extension Development Host (not just the original VS Code window).
+- If the panel is not visible, run `Pixel Agents: Show Panel` again from Command Palette.
+- To inspect binding/session issues, open **Debug** mode in the panel and use **Retry Bind**.
 
 ## Codex Session Tracking
 
